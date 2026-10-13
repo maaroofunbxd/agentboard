@@ -97,3 +97,22 @@ def test_here_is_the_main_repo_in_any_worktree(tmp_path, monkeypatch):
 def test_agent_pid_from_any_tool(jdir, monkeypatch):
     monkeypatch.setenv("AGENTS_AGENT_PID", "777")  # any tool can say which process is the agent
     assert identity.agent_pid() == 777
+
+
+def test_resolve_to_a_repo_all_or_one_session(jdir, monkeypatch):
+    from agentboard import board as j
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", "fd00.60203")
+    j.post("claim", "x")
+    rows = j.agent_posts()
+    assert j.resolve_to(rows, "api") == ("api", None) and j.resolve_to(rows, "all") == ("all", None)
+    assert j.resolve_to(rows, "api-fd00") == ("api", "fd00") and j.resolve_to(rows, "api-fd00.60203") == ("api", "fd00.60203")
+    assert j.resolve_to(rows, "api-zzzz") == ("api-zzzz", None)  # no such session: a repo of that name
+    assert j.resolve_to(rows, "api-") == ("api-", None)
+    # an old line (no to_session) is for everyone; a thread on a claim is read like one on a post
+    old = {"kind": "post", "id": "aaaaaa", "to": "api", "text": "old"}
+    assert j.addressed(old, "fd00.60203") and j.addressed({"to_session": "fd00"}, "fd00.60203") and not j.addressed({"to_session": "fd00"}, "e6e6.1")
+    [claim] = [r for r in rows if r["kind"] == "claim"]
+    assert j.thread(rows, claim["id"]) == [claim] and j.thread(rows, "nope00") == []

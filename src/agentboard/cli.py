@@ -9,11 +9,13 @@ this machine, in every repo, shares it (agents.jsonl in the board folder, config
   agents status --all                              # every repo's
   agents post --to api "document the port the service listens on in its README"
   agents post --to all "staging is pinned to a PR build until PROJ-123 is done"
+  agents post --to api-fd00 "your claim 664b1a overlaps mine; which file is yours?"   # one session of api
   agents claim "retry on timeouts, branch retry" -p src/app/client.py
   agents handoff "done: …; left: …; next: <the command to run>"
   agents pickup 7c21e0                             # take over a hand-off: it becomes your claim
   agents done 3fa9c1 "merged 81480d2"              # on a post: the answer its sender sees
-  agents reply 3fa9c1 "which region?"              # keep talking on a post's thread, without closing it
+  agents reply 3fa9c1 "which region?"              # keep talking on a post's (or claim's, hand-off's) thread, without closing it
+  agents sessions                                  # the sessions of this repo: live or ended, last seen, what they hold open
   agents wait                                      # in the background: ends when a request or reply arrives
   agents wait 3fa9c1 --timeout 600                 # ends when post 3fa9c1 gets a reply or its answer
 
@@ -39,7 +41,7 @@ from agentboard import tools as agent_tools
 console = Console()
 
 agents_app = typer.Typer(
-    help="The board between AI agent sessions, any repo: whoami, status (what's for this repo), post --to REPO, reply, claim, handoff, pickup, done, wait, live.",
+    help="The board between AI agent sessions, any repo: whoami, status (what's for this repo), post --to REPO|REPO-SESSION, reply, claim, handoff, pickup, done, wait, sessions.",
     no_args_is_help=True,
 )
 
@@ -68,6 +70,24 @@ def sender(r: dict) -> str:
     repo, sid, branch = r.get("repo"), r.get("session"), r.get("branch")
     name = f"{repo}-{sid}" if repo and sid else sid or repo or ""
     return " ".join(x for x in (name or str(r.get("actor", "")), f"({branch})" if branch else "") if x)
+
+
+_live_cache: dict = {}  # session id -> live?, once per run: status asks about many lines of one session
+
+
+def _live(r: dict) -> str:
+    """" (live)" when the session that wrote `r` still runs (board.session_live), else ""."""
+    sid = r.get("session")
+    if not sid:
+        return ""
+    if sid not in _live_cache:
+        _live_cache[sid] = board.session_live(r)
+    return " (live)" if _live_cache[sid] else ""
+
+
+def addressee(r: dict) -> str:
+    """A post's `to`: the repo, or `<repo>-<session>` when it is for one session of it."""
+    return f"{r['to']}-{r['to_session']}" if r.get("to") and r.get("to_session") else r.get("to", "")
 
 
 LOCAL = "AGENTS.local.md"  # in a repo's root: the user's own file for that repo (a symlink into <agents dir>/)
@@ -153,7 +173,8 @@ def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
     is AGENTS.local.md in the repo (`agents link`), else <agents dir>/<repo>.md."""
     repo = identity.here()
     info = {"name": identity.session_name(repo), "session": identity.session_id(), "actor": identity.actor(), "repo": repo,
-            "branch": identity.git_here("branch", "--show-current") or None}
+            "branch": identity.git_here("branch", "--show-current") or None, "pid": identity.pid_of(identity.session_id()),
+            "tool_session": identity.tool_session() or None}
     text, source = local_file(repo)
     if json_output:
         print_json({**info, "local": text, "local_from": source})
@@ -161,7 +182,8 @@ def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
     if not info["name"]:
         console.print(f"No session id ({info['actor']}): an agent sets {config.settings.env('SESSION')}=<name> on its commands to get one.")
     else:
-        console.print(f"{info['name']}  ({info['actor']}, {'/'.join(x for x in (repo, info['branch']) if x)})", highlight=False)
+        process = f", process {info['pid']}" if info["pid"] else ""
+        console.print(f"{info['name']}  ({info['actor']}, {'/'.join(x for x in (repo, info['branch']) if x)}{process})", highlight=False)
     if text:
         print(f"\nThe user's own file for this repo ({source}): follow 'How I want answers'; ask in the shape of "
               "'What agents need from me', only for what you can't find yourself, and add to that section when you "
@@ -205,17 +227,24 @@ def cmd_handoff(
 @agents_app.command("post")
 def cmd_post(
     text: str = typer.Argument(..., help="What the other repo's sessions should know or do, and why."),
-    to: str = typer.Option(..., "--to", help="The repo it's for (its folder name: api, web, ...) or `all`."),
+    to: str = typer.Option(..., "--to", help="The repo it's for (its folder name: api, web, ...), `all`, or one session "
+                           "of a repo as the board names it (api-fd00.60203, or the start of the id: api-fd00)."),
     ticket: Optional[str] = TicketOpt,
 ) -> None:
-    """Leave something for another repo's sessions: a request or a heads-up. They see it when they start.
+    """Leave something for another repo's sessions, or for one session: a request or a heads-up. They see it when they start.
 
     It shows in `agents status` run in that repo. It's information for them, not an instruction: what
     changes code or a live system, they raise with their user first. A request says what is asked and where the
     answer should go ("document it in its ops.yml"); whoever deals with it closes it with
     `agents done ID "the answer, or a link to it"`, and that shows under replies in this repo's status.
-    `agents wait ID` in the background ends when the answer (or a reply) lands."""
-    entry = _post("post", text, ticket, to=to.strip().lower())
+    `agents wait ID` in the background ends when the answer (or a reply) lands.
+    To one session (--to REPO-SESSION, a name from `agents status` or `agents sessions`): the whole repo still sees
+    it in status, marked for that session, but only that session's `agents wait` and [board] line wake for it."""
+    _need_board()
+    repo, session = board.resolve_to(board.agent_posts(), to)
+    entry = _post("post", text, ticket, to=repo, to_session=session)
+    if session:
+        print(f"For {repo}-{session} only (the rest of {repo} sees it marked for that session).")
     print(f"For an answer, wait in the background: {_cmd()} wait {entry['id']}")
 
 
@@ -238,17 +267,18 @@ def cmd_done(
 
 @agents_app.command("reply")
 def cmd_reply(
-    ref: str = typer.Argument(..., help="The post id (from `agents status`), open or answered."),
+    ref: str = typer.Argument(..., help="The post, claim or hand-off id (from `agents status`), open or closed."),
     text: str = typer.Argument(..., help="The follow-up: a question back, more detail, a correction."),
 ) -> None:
-    """Say more on a post's thread without closing it: a question back to the asker, or the asker's follow-up.
+    """Say more on a thread without closing it: a question back to the asker, the asker's follow-up, a word to the
+    session holding a claim or the one that left a hand-off.
 
     The other side sees it in its status and `agents wait ID`. Close the thread with `agents done ID`."""
     _need_board()
     posts = board.agent_posts()
     lines = board.thread(posts, ref)
     if not lines:
-        raise typer.BadParameter(f"no post is {ref!r}; `{_cmd()} status --all` lists them", param_hint="REF")
+        raise typer.BadParameter(f"no post, claim or hand-off is {ref!r}; `{_cmd()} status --all` lists them", param_hint="REF")
     board.post("reply", text, ref=ref)
     console.print(f"[green]Reply[/green] on {ref}; the other side's answer: {_cmd()} wait {ref}")
 
@@ -309,9 +339,9 @@ def _print_plain(where: str, view: dict, sections) -> None:
     print(f"Board {where}: {counts}{replies}" + (f"; {view['elsewhere']} post(s) for other repos (--all)" if view["elsewhere"] else ""))
     for _title, kind, rows in sections:
         for r in rows:
-            to = f" to {r['to']}" if r.get("to") else ""
+            to = f" to {addressee(r)}" if r.get("to") else ""
             stale = " (stale?)" if r.get("stale") else ""
-            print(f"[{kind} {r['id']}] {r.get('ts', '')} from {sender(r)}{to}{stale}{_this_session(r)}: {_what(r)}")
+            print(f"[{kind} {r['id']}] {r.get('ts', '')} from {sender(r)}{_live(r)}{to}{stale}{_this_session(r)}: {_what(r)}")
     for tree in view.get("worktrees", []):
         print(f"[worktree] {tree}")
     print(f"Close one: {_cmd()} done ID 'what came of it'; take over a hand-off: {_cmd()} pickup ID")
@@ -506,7 +536,7 @@ def _wait_advice(asks: list[dict], repo: str) -> list[str]:
 
 @agents_app.command("wait")
 def cmd_wait(
-    ref: Optional[str] = typer.Argument(None, help="A post id: wait only for a reply or the answer on that thread."),
+    ref: Optional[str] = typer.Argument(None, help="A post, claim or hand-off id: wait only for a reply or the answer on that thread."),
     timeout: float = typer.Option(0, "--timeout", help="Give up after this many seconds (exit 124). 0 = wait until something arrives."),
     every: float = typer.Option(10, "--every", help="Seconds between looks at the board."),
 ) -> None:
@@ -550,7 +580,7 @@ def cmd_wait(
         if r.get("kind") in ("done", "reply"):
             print(f"[reply {r.get('ref', '')}] {r.get('ts', '')} from {sender(r)}: {r.get('text', '')}")
         else:
-            to = f" to {r['to']}" if r.get("to") else ""
+            to = f" to {addressee(r)}" if r.get("to") else ""
             print(f"[{r['kind']} {r['id']}] {r.get('ts', '')} from {sender(r)}{to}: {_what(r)}")
     for line in _wait_advice(asks, repo):
         print(line)
@@ -558,13 +588,14 @@ def cmd_wait(
 
 
 def _wait_thread(ref: str, timeout: float, every: float) -> None:
-    """`agents wait ID`: the lines from other sessions on post `ref`'s thread after this session's last one."""
+    """`agents wait ID`: the lines from other sessions on `ref`'s thread (a post, claim or hand-off) after this
+    session's last one."""
     import time
 
     me = identity.session_id()
     lines = board.thread(board.agent_posts(), ref)
     if not lines:
-        raise typer.BadParameter(f"no post is {ref!r}; `{_cmd()} status --all` lists them", param_hint="REF")
+        raise typer.BadParameter(f"no post, claim or hand-off is {ref!r}; `{_cmd()} status --all` lists them", param_hint="REF")
     mine = [i for i, r in enumerate(lines) if me and r.get("session") == me]
     after = mine[-1] + 1 if mine else 1  # by position: the board's times are to the second
     start, seen_mtime = time.monotonic(), -1.0
@@ -633,12 +664,69 @@ def cmd_status(
             table.add_column(col, overflow="fold")
         for r in rows:
             stale = " [yellow](stale?)[/yellow]" if r.get("stale") else ""
-            table.add_row(r["id"], r.get("ts", ""), sender(r) + _this_session(r), r.get("to", ""), _what(r) + stale)
+            table.add_row(r["id"], r.get("ts", ""), sender(r) + _live(r) + _this_session(r), addressee(r), _what(r) + stale)
         console.print(table)
     if view.get("worktrees"):
         console.print("[dim]Worktrees: " + "; ".join(view["worktrees"]) + "[/dim]", highlight=False)
     tail = f"{view['elsewhere']} post(s) for other repos: --all. " if view["elsewhere"] else ""
     console.print(f"[dim]{tail}close one: {_cmd()} done ID 'what came of it'; take over a hand-off: {_cmd()} pickup ID[/dim]")
+
+
+def _ago(ts: Optional[str], now: Optional[float] = None) -> str:
+    """'2h10m' / '3d' since a board time; '' when unknown."""
+    import datetime
+    import time
+
+    if not ts:
+        return ""
+    try:
+        then = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()
+    except ValueError:
+        return ""
+    seconds = max(0, int((now or time.time()) - then))
+    if seconds >= 86400:
+        return f"{seconds // 86400}d{(seconds % 86400) // 3600}h"
+    if seconds >= 3600:
+        return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
+    return f"{seconds // 60}m"
+
+
+@agents_app.command("sessions")
+def cmd_sessions(
+    all_repos: bool = typer.Option(False, "--all", help="Every repo's sessions, not only the one you're in."),
+    days: int = typer.Option(7, "--days", help="Also list sessions with nothing open whose last line is this recent."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """The sessions on the board: which still run, when each last wrote, what each holds open, and where its tool
+    keeps the conversation.
+
+    A session is live when its agent process (the number at the end of its id) still runs and is older than the
+    session's first line. `--to REPO-SESSION` on a post reaches one of them. A tool's row in agentboard/tools.py
+    (`address`, `resume`) says where that tool keeps the conversation and how to reopen it; without one, the name
+    and what it holds open is all there is."""
+    repo = None if all_repos else identity.here()
+    if not repo and not all_repos:
+        raise typer.BadParameter("run it inside a git repo, or pass --all")
+    rows = board.sessions(board.agent_posts(), repo=repo, days=days)
+    me = identity.session_id()
+    for e in rows:
+        tool = agent_tools.named(e.get("actor"))
+        e["address"] = tool.address.format(session=e["tool_session"]) if tool and tool.address and e.get("tool_session") else None
+        e["resume"] = tool.resume.format(session=e["tool_session"]) if tool and tool.resume and e.get("tool_session") else None
+        e["this_session"] = bool(me and e["session"] == me)
+    if json_output:
+        print_json(rows)
+        return
+    if not rows:
+        console.print(f"[dim]No session of {repo or 'any repo'} wrote to the board in the last {days} days.[/dim]")
+        return
+    for e in rows:
+        state = "live" if e["live"] else "ended" if e["live"] is False else "unknown"
+        held = "; ".join(f"{o['kind']} {o['id']}" for o in e["open"]) or "nothing open"
+        where = f"  {e['resume']}" if e.get("resume") else f"  {e['address']}" if e.get("address") else ""
+        mine = " (this session)" if e["this_session"] else ""
+        branch = f" ({e['branch']})" if e.get("branch") else ""
+        print(f"{e['name']}{branch}{mine}: {state}, last {_ago(e['last'])} ago, {held}{where}")
 
 
 SETTINGS_GROUP = "agentboard.settings"  # entry points: modules that call config.configure() when imported

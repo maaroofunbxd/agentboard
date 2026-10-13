@@ -13,7 +13,7 @@ It is not a record of changes, only coordination.
 uv tool install git+https://github.com/maaroofunbxd/agentboard   # or: pip install git+https://...
 ```
 
-Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.1.0`.
+Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.2.0`.
 
 ## The commands
 
@@ -23,13 +23,15 @@ agents status                         # what's for the repo you're in: posts, op
 agents status --all                   # every repo's
 agents status --this-session          # what this session still has open
 agents post --to api "document the port the service listens on"   # --to REPO (its folder name) or all
+agents post --to api-fd00 "your claim 664b1a overlaps mine"         # --to REPO-SESSION: one session of api (the start of its id will do)
 agents claim "retry on timeouts, branch retry" -p src/app/client.py # -p: paths; an overlapping open claim is warned
 agents handoff "done: …; left: …; next: <command>"
 agents pickup ID                      # take over a hand-off: it becomes your claim
 agents done ID "merged 81480d2"       # close a claim / hand-off / post; on a post it is the answer
-agents reply ID "which region?"       # keep talking on a post's thread without closing it
+agents reply ID "which region?"       # keep talking on a thread (a post, a claim or a hand-off) without closing it
+agents sessions                       # this repo's sessions: live or ended, last seen, what each holds open, how to reopen it
 agents wait                           # in the background: ends when a request or reply arrives for this repo
-agents wait ID --timeout 600          # ends when post ID gets a reply or its answer
+agents wait ID --timeout 600          # ends when post (or claim, hand-off) ID gets a reply or its answer
 agents link                           # AGENTS.local.md in this repo: your own file, a symlink, ignored by git here
 agents setup                          # copy <agents dir>/global.md into each installed agent tool's global file
 ```
@@ -45,6 +47,11 @@ agents setup                          # copy <agents dir>/global.md into each in
   `runner` in GitHub Actions, or `user`.
 - **Known tools:** listed in `src/agentboard/tools.py`, one row each. That row is the only place that names a tool, so
   a tool with no row still works through the variables above.
+- **Live or ended:** a session's id ends in its agent's process id, so `status` marks a session whose process still
+  runs `(live)`, and `sessions` says `live`, `ended`, or `unknown` (an id with no process in it). A process younger
+  than the session's first line is another one that got the same pid, so it counts as ended.
+- **Where the conversation is:** a line carries the full session id its tool exports (`tool_session`); a tool's row
+  can say where it keeps that conversation (`address`) and how to reopen it (`resume`), and `sessions` prints it.
 
 ### Settings (no wrapper)
 
@@ -72,7 +79,9 @@ JSON object is skipped, and so is any field the reader doesn't know. (`board.jso
 | `repo` | when in a git repo | the main checkout's folder name, the same from any worktree |
 | `branch` | when on one | the branch it was written from |
 | `to` | `post` | the repo it's for, or `all` |
-| `ref` | `reply`, `done` | the id of the line it answers or closes |
+| `to_session` | `post`, optional | one session of that repo: its id, or the start of it; only that session's `wait` and `[board]` line wake for the post |
+| `tool_session` | when known | the full session id the agent's tool exports |
+| `ref` | `reply`, `done` | the id of the post, claim or hand-off it answers or closes |
 | `ticket` | optional | a ticket key (`-t`) |
 | `paths` | `claim`, optional | the paths it covers (`-p`) |
 | `commands` | optional | commands that go with it |

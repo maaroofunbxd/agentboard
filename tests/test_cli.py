@@ -528,3 +528,100 @@ def test_main_loads_a_wrappers_settings(jdir, monkeypatch):
     monkeypatch.setenv("AGENTS_WRAPPERS", "off")
     cli.load_wrappers()
     assert config.settings.command == "agents"
+
+
+def test_a_reply_on_a_claim_or_handoff_reaches_its_session(jdir, monkeypatch):
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    run("agents", "claim", "retry on timeouts, branch retry", "-p", "src/client.py")
+    run("agents", "handoff", "done: half; left: tests; next: agents pickup")
+    view = json.loads(run("agents", "status", "--json").output)
+    [claim], [handoff] = view["claims"], view["handoffs"]
+    monkeypatch.setenv("AGENTS_SESSION", "bbbb")
+    assert run("agents", "reply", claim["id"], "I need src/client.py too; which part is yours?").exit_code == 0
+    assert run("agents", "reply", "nope00", "x").exit_code != 0
+    monkeypatch.setenv("AGENTS_SESSION", "cccc")
+    assert run("agents", "pickup", handoff["id"]).exit_code == 0
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    replies = {r["id"]: r["reply"] for r in json.loads(run("agents", "status", "--json").output)["replies"]}
+    assert replies == {claim["id"]: "I need src/client.py too; which part is yours?"}  # the pickup is not a reply
+    # `wait ID` on the claim: the reply from bbbb came after aaaa's last line on it
+    result = run("agents", "wait", claim["id"], "--timeout", "0.1", "--every", "0.01")
+    assert result.exit_code == 0 and "which part is yours?" in result.output and "api-bbbb" in result.output
+
+
+def test_a_post_to_one_session_wakes_only_that_session(jdir, monkeypatch):
+    from agentboard import board as j
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", "fd00.60203")
+    run("agents", "claim", "the split")
+    monkeypatch.setenv("AGENTS_SESSION", "e6e6.1")
+    run("agents", "claim", "something else")
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    result = run("agents", "post", "your claim overlaps mine", "--to", "api-fd00")
+    assert result.exit_code == 0 and "For api-fd00 only" in result.output, result.output
+    run("agents", "post", "for every api session", "--to", "api")
+    run("agents", "post", "a repo with a dash, no session", "--to", "my-lib")
+    lines = [json.loads(x) for x in (jdir / "agents.jsonl").read_text().splitlines()]
+    posts = {r["text"]: r for r in lines if r["kind"] == "post"}
+    assert posts["your claim overlaps mine"]["to"] == "api" and posts["your claim overlaps mine"]["to_session"] == "fd00"
+    assert "to_session" not in posts["for every api session"]
+    assert posts["a repo with a dash, no session"]["to"] == "my-lib" and "to_session" not in posts["a repo with a dash, no session"]
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    out = run("agents", "status").output
+    assert " to api-fd00" in out and "your claim overlaps mine" in out  # the repo sees it, marked for that session
+    rows = j.agent_posts()
+    assert [r["text"] for r in j.board_asks(rows, "api", "fd00.60203", "2020-01-01T00:00:00Z") if r["kind"] == "post"] == \
+        ["your claim overlaps mine", "for every api session"]
+    assert [r["text"] for r in j.board_asks(rows, "api", "e6e6.1", "2020-01-01T00:00:00Z") if r["kind"] == "post"] == \
+        ["for every api session"]
+
+
+def test_sessions_live_or_ended_and_whoami_names_the_process(jdir, monkeypatch):
+    import os
+
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", f"p{os.getpid()}")  # this test's process: live
+    result = run("agents", "whoami")
+    assert f"process {os.getpid()}" in result.output
+    run("agents", "claim", "mine, still running")
+    monkeypatch.setenv("AGENTS_SESSION", "ab12.4194303")  # no such process (pid_max is lower on macOS and Linux)
+    run("agents", "handoff", "left behind")
+    monkeypatch.setenv("AGENTS_SESSION", "nopid")
+    run("agents", "claim", "a session that set its own name: no process to check")
+    out = run("agents", "status").output
+    live = [line for line in out.splitlines() if "(live)" in line]
+    assert len(live) == 1 and f"from api-p{os.getpid()} " in live[0], out
+    rows = json.loads(run("agents", "sessions", "--json").output)
+    by = {r["name"]: r for r in rows}
+    assert by[f"api-p{os.getpid()}"]["live"] is True and by[f"api-p{os.getpid()}"]["open"][0]["text"] == "mine, still running"
+    assert by["api-ab12.4194303"]["live"] is False and by["api-nopid"]["live"] is None
+    states = {line.split(" ", 1)[0]: line.split(": ", 1)[1].split(",", 1)[0] for line in run("agents", "sessions").output.splitlines()}
+    assert states == {f"api-p{os.getpid()}": "live", "api-ab12.4194303": "ended", "api-nopid": "unknown"}
+    # the pid's process is younger than the session's first line: another process got that pid
+    assert identity.alive(f"p{os.getpid()}", "2000-01-01T00:00:00Z") is False
+    assert identity.alive(f"p{os.getpid()}") is True and identity.pid_of("fd00.60203") == 60203 and identity.pid_of("aaaa") is None
+
+
+def test_a_tools_row_gives_the_session_an_address(jdir, monkeypatch):
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.delenv("AGENTS_ACTOR")
+    tool = agent_tools.named("claude-code")
+    monkeypatch.setenv(tool.detect[0], "1")
+    monkeypatch.setenv(tool.session_env, "0f3a1b2c-full-session-id")
+    monkeypatch.setenv(tool.pid_env, "4194303")
+    run("agents", "claim", "from a known tool")
+    [line] = [json.loads(x) for x in (jdir / "agents.jsonl").read_text().splitlines()]
+    assert line["actor"] == "agent:claude-code" and line["tool_session"] == "0f3a1b2c-full-session-id"
+    [row] = json.loads(run("agents", "sessions", "--json").output)
+    assert row["resume"] == "claude --resume 0f3a1b2c-full-session-id" and row["address"].endswith("/0f3a1b2c-full-session-id.jsonl")
+    assert "claude --resume 0f3a1b2c-full-session-id" in run("agents", "sessions").output

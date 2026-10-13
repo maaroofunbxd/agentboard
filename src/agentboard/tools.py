@@ -4,7 +4,7 @@ Nothing on the board needs any of them. With none, a person at a terminal, or an
 <PREFIX>_ACTOR=agent:<name> and <PREFIX>_SESSION=<id> on its commands (config.Settings.env_prefix: AGENTS_, or a wrapper's),
 gets every command. A row here only adds what a tool offers by itself: recognising it from the variables it sets in
 its shells (so it needn't set the actor), its session id and process (so it needn't set the session), the command
-that starts a session with a prompt, a file it loads by itself that can pull in a repo's AGENTS.local.md (`agents
+that starts a session with a prompt, where it keeps a conversation and how to reopen one (`agents sessions`), a file it loads by itself that can pull in a repo's AGENTS.local.md (`agents
 link --for TOOL`), and where it keeps its global instructions and its prompt hook, which `agents setup` copies in
 from <agents dir>/global.md. A new tool is a new row; a tool that goes away is a deleted row, and nothing else changes.
 """
@@ -28,6 +28,8 @@ class Tool:
     global_file: str = ""  # its global instructions file (~ allowed): `agents setup` writes a copy of global.md there
     settings_file: str = ""  # its JSON settings file holding hooks, when it runs a command on each prompt
     prompt_hook_event: str = ""  # the hook event in settings_file that fires on each prompt
+    address: str = ""  # where it keeps a conversation, with {session} = its full session id (`agents sessions`)
+    resume: str = ""  # the command that reopens that conversation, with {session}
 
     @property
     def actor(self) -> str:
@@ -37,7 +39,8 @@ class Tool:
 TOOLS = (
     Tool("claude-code", ("CLAUDECODE",), session_env="CLAUDE_CODE_SESSION_ID", pid_env="CLAUDE_PID", command="claude",
          local_file="CLAUDE.local.md", repo_file="CLAUDE.md", import_line="@{}", global_file="~/.claude/CLAUDE.md",
-         settings_file="~/.claude/settings.json", prompt_hook_event="UserPromptSubmit"),
+         settings_file="~/.claude/settings.json", prompt_hook_event="UserPromptSubmit",
+         address="~/.claude/projects/*/{session}.jsonl", resume="claude --resume {session}"),
     Tool("codex", ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"), command="codex"),
     Tool("gemini-cli", ("GEMINI_CLI",), command="gemini"),
     Tool("cursor", ("CURSOR_AGENT",), command="cursor-agent"),

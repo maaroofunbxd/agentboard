@@ -1,4 +1,4 @@
-"""The board between agent sessions (post, claim, handoff, pickup, done, reply, wait, status, whoami, link, setup).
+"""The board between agent sessions (post, claim, handoff, pickup, done, reply, wait, status, sessions, whoami, link, setup).
 
 - config.py: where the board lives and what it calls itself (a wrapper calls configure())
 - identity.py: the actor, the session id and name, the repo you're in
@@ -9,4 +9,4 @@
 - cli.py: the typer app and the `agents` console script (a wrapper can mount the app as a subcommand)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -1,8 +1,9 @@
 """The board between agent sessions: the `agents` stream of the store (store.py; the plain file: agents.jsonl in
 the board folder, config.Settings.board_dir).
 
-Not a record of changes, coordination: claims (I'm on X), hand-offs, posts to another repo's sessions (`to`), a
-`reply` on a post's thread (`ref`), and the `done` that closes one. board.jsonl, its old name, is still read. Every
+Not a record of changes, coordination: claims (I'm on X), hand-offs, posts to another repo's sessions (`to`, or to
+one session of it: `to_session`), a `reply` on the thread of a post, claim or hand-off (`ref`), and the `done` that
+closes one. board.jsonl, its old name, is still read. Every
 line says when, who (`by`, the OS / GitHub user), `actor` and `session` (identity.py), the repo and branch it was
 posted from. Writing never fails the command it is part of.
 """
@@ -65,14 +66,17 @@ def read(stream: str = AGENTS) -> list[dict]:
 
 
 def post(kind: str, text: str, ref: Optional[str] = None, commands: list[str] | None = None, to: Optional[str] = None,
-         **fields: Any) -> dict:
-    """One line in agents.jsonl, with the repo and branch it was posted from (which session is on what).
-    A `post` is addressed: `to` is a repo name (api, web, ...) or `all`."""
+         to_session: Optional[str] = None, **fields: Any) -> dict:
+    """One line in agents.jsonl, with the repo and branch it was posted from (which session is on what), and the
+    full session id its tool exports (`tool_session`, identity.tool_session), when it has one.
+    A `post` is addressed: `to` is a repo name (api, web, ...) or `all`; with `to_session`, one session of that repo
+    (an id, or the start of one: resolve_to)."""
     if kind not in KINDS:
         raise ValueError(f"kind is one of {', '.join(KINDS)}, not {kind!r}")
     if kind == "post" and not to:
-        raise ValueError("a post is for a repo's sessions: --to REPO (api, web, ...) or --to all")
+        raise ValueError("a post is for a repo's sessions: --to REPO (api, web, ...), --to all, or --to REPO-SESSION")
     entry = {"kind": kind, "id": uuid.uuid4().hex[:6], "text": text, "repo": identity.here(), "session": identity.session_id(), "to": to,
+             "to_session": to_session, "tool_session": identity.tool_session() or None,
              "branch": identity.git_here("branch", "--show-current") or None, "ref": ref, "commands": commands or None, **fields}
     entry = {k: v for k, v in entry.items() if v}
     _append(entry)
@@ -82,6 +86,58 @@ def post(kind: str, text: str, ref: Optional[str] = None, commands: list[str] | 
 def agent_posts() -> list[dict]:
     """agents.jsonl, plus board.jsonl from before the rename, oldest first."""
     return sorted(read("board") + read(AGENTS), key=lambda r: r.get("ts", ""))
+
+
+HEADS = ("claim", "handoff", "post")  # the kinds a `reply` or `done` refers to: each starts a thread
+
+
+def resolve_to(rows: list[dict], to: str) -> tuple[str, Optional[str]]:
+    """What `--to` names: (repo, None) for a repo or `all`; (repo, session id) for a session, `<repo>-<id>` as the
+    board prints it, or the start of the id (`api-fd00` reaches api-fd00.60203 and a resumed copy api-fd00.71): a
+    session that has written to the board. Any other name is a repo's."""
+    to = to.strip()
+    for r in reversed(rows):
+        repo, sid = r.get("repo"), r.get("session")
+        if repo and sid and to.startswith(f"{repo}-") and f"{repo}-{sid}".startswith(to) and len(to) > len(repo) + 1:
+            return repo, to[len(repo) + 1:]
+    return to.lower(), None
+
+
+def addressed(r: dict, session: Optional[str]) -> bool:
+    """A post to one session (`to_session`) is for the sessions whose id starts with it; every other line is for all."""
+    want = r.get("to_session")
+    return not want or bool(session and session.startswith(want))
+
+
+def session_live(r: dict) -> Optional[bool]:
+    """Whether the session that wrote `r` still runs (identity.alive), given the line's time; None when unknown."""
+    return identity.alive(r.get("session"), r.get("ts"))
+
+
+def sessions(rows: list[dict], repo: Optional[str] = None, now: Optional[datetime.datetime] = None, days: int = 7) -> list[dict]:
+    """One entry per session that wrote to the board in the last `days` days or still has a claim or hand-off open,
+    newest first: name, repo, session, actor, branch, first and last line times, live (session_live of its last line),
+    open (its open claims and hand-offs, oldest first) and tool_session. With `repo`, only that repo's."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    recent = (now - datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
+    out: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r.get("repo"), r.get("session"))
+        if not all(key) or (repo and key[0] != repo):
+            continue
+        entry = out.setdefault(key, {"name": f"{key[0]}-{key[1]}", "repo": key[0], "session": key[1], "actor": r.get("actor"),
+                                     "branch": None, "first": r.get("ts"), "last": None, "open": [], "tool_session": None})
+        entry["last"] = r.get("ts")
+        entry["branch"] = r.get("branch") or entry["branch"]
+        entry["tool_session"] = r.get("tool_session") or entry["tool_session"]
+        entry["actor"] = r.get("actor") or entry["actor"]
+        if r.get("kind") in ("claim", "handoff") and r.get("id") not in closed:
+            entry["open"].append({"kind": r["kind"], "id": r["id"], "text": r.get("text", "")})
+    keep = [e for e in out.values() if e["open"] or (e["last"] or "") >= recent]
+    for e in keep:
+        e["live"] = identity.alive(e["session"], e["first"])
+    return sorted(keep, key=lambda e: e["last"] or "", reverse=True)
 
 
 def agents_view(rows: list[dict], now: Optional[datetime.datetime] = None, repo: Optional[str] = None) -> dict:
@@ -105,13 +161,16 @@ def agents_view(rows: list[dict], now: Optional[datetime.datetime] = None, repo:
 
 def replies(rows: list[dict], repo: str, since: str = "") -> list[dict]:
     """Answers on the threads this repo is part of, since `since`: on this repo's posts, a `done` or `reply` from
-    another session; on a post to this repo, a `reply` from the session that asked (a follow-up). Each is the post,
-    with the line's text as `reply` and the line as `replied`. How each side of a conversation sees the other."""
-    posts = {r["id"]: r for r in rows if r.get("kind") == "post" and r.get("id")}
+    another session; on its claims and hand-offs, a `reply` from another session (a pickup or a close is not one);
+    on a post to this repo, a `reply` from the session that asked (a follow-up). Each is the head line, with the line's text as `reply`
+    and the line as `replied`. How each side of a conversation sees the other."""
+    posts = {r["id"]: r for r in rows if r.get("kind") in HEADS and r.get("id")}
     out = []
     for d in rows:
         asked = posts.get(d.get("ref")) if d.get("kind") in ("done", "reply") else None
         if not asked or d.get("ts", "") <= since:
+            continue
+        if d.get("kind") == "done" and asked.get("kind") != "post":  # a pickup or a close is not a reply
             continue
         by_asker = (d.get("session"), d.get("repo")) == (asked.get("session"), asked.get("repo"))
         if (asked.get("repo") == repo and not by_asker) or (d.get("kind") == "reply" and by_asker and asked.get("to") == repo):
@@ -120,8 +179,8 @@ def replies(rows: list[dict], repo: str, since: str = "") -> list[dict]:
 
 
 def thread(rows: list[dict], ref: str) -> list[dict]:
-    """A post and every `reply` and `done` on it, oldest first; [] when no post is `ref`."""
-    head = [r for r in rows if r.get("kind") == "post" and r.get("id") == ref]
+    """A post, claim or hand-off and every `reply` and `done` on it, oldest first; [] when nothing is `ref`."""
+    head = [r for r in rows if r.get("kind") in HEADS and r.get("id") == ref]
     return head + [r for r in rows if r.get("ref") == ref and r.get("kind") in ("reply", "done")] if head else []
 
 
@@ -167,13 +226,15 @@ def mark_seen(session: Optional[str], ts: Optional[str] = None) -> None:
 
 def board_news(rows: list[dict], repo: str, session: str, since: str) -> list[dict]:
     """What other sessions put on the board after `since` that the sessions of `repo` should know: posts to it (or
-    to all), claims and hand-offs from its other sessions, and replies on its threads."""
+    to all; one to a single session only reaches that session), claims and hand-offs from its other sessions, and
+    replies on its threads."""
     news = []
     for r in rows:
         if r.get("ts", "") <= since or (r.get("session") == session and r.get("repo") == repo):
             continue
         kind = r.get("kind")
-        if (kind == "post" and r.get("to") in (repo, "all")) or (kind in ("claim", "handoff") and r.get("repo") == repo):
+        if (kind == "post" and r.get("to") in (repo, "all") and addressed(r, session)) or \
+                (kind in ("claim", "handoff") and r.get("repo") == repo):
             news.append(r)
     news += [x["replied"] for x in replies(rows, repo, since=since)]
     return sorted(news, key=lambda r: r.get("ts", ""))

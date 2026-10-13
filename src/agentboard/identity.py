@@ -74,6 +74,56 @@ def session_id() -> Optional[str]:
     return value
 
 
+def tool_session() -> str:
+    """The full session id the agent's tool exports (tools.py, `session_env`), '' when it has none: a board line
+    carries it as `tool_session`, so `agents sessions` can say where the tool keeps that conversation (Tool.address)."""
+    return tools.env(tools.named(actor()), "session_env")
+
+
+def pid_of(session: Optional[str]) -> Optional[int]:
+    """The agent process in a session id (`<tool id>.<pid>` or `p<pid>`); None when it carries none."""
+    m = re.search(r"(?:^p|\.)(\d+)$", session or "")
+    return int(m.group(1)) if m else None
+
+
+def process_age(pid: int) -> Optional[float]:
+    """Seconds since the process started (`ps -o etime`), None when it doesn't run or can't be asked."""
+    try:
+        out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)], capture_output=True, text=True, timeout=3).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not out:
+        return None
+    days, _, clock = out.rpartition("-")
+    parts = [int(x) for x in clock.split(":")]
+    seconds = sum(x * 60**i for i, x in enumerate(reversed(parts)))
+    return seconds + int(days or 0) * 86400
+
+
+def alive(session: Optional[str], since: Optional[str] = None, now: Optional[float] = None) -> Optional[bool]:
+    """Whether the session's agent process still runs: True, False, or None when the id carries no process. With
+    `since` (a board line's UTC time, `YYYY-MM-DDTHH:MM:SSZ`), a process younger than that line is another one
+    that got the same pid, so False."""
+    import datetime
+    import time
+
+    pid = pid_of(session)
+    if not pid:
+        return None
+    age = process_age(pid)
+    if age is None:
+        return False
+    if since:
+        try:
+            started = (now or time.time()) - age
+            line = datetime.datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).timestamp()
+            if started > line + 60:
+                return False
+        except ValueError:
+            pass
+    return True
+
+
 def session_name(repo: Optional[str] = None) -> Optional[str]:
     """`<repo>-<id>`, e.g. api-734b.4506: what a session calls itself on the board and in its first message."""
     sid = session_id()
