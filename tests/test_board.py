@@ -18,6 +18,7 @@ def jdir(tmp_path, monkeypatch):
     for var in ("AGENTS_ACTOR", "AGENTS_SESSION", "AGENTS_AGENT_PID", "GITHUB_ACTIONS", "GITHUB_ACTOR"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(identity, "_session", [])
+    monkeypatch.setenv("AGENTS_NOTIFY", "off")  # no desktop pop-ups from the tests
     return tmp_path / "board"
 
 

@@ -263,10 +263,39 @@ def board_news(rows: list[dict], repo: str, session: str, since: str) -> list[di
 def board_asks(rows: list[dict], repo: str, session: str, since: str) -> list[dict]:
     """The part of board_news a session should stop and tell its user about (what `agents wait` wakes it for): posts
     to the repo still open, hand-offs still open, replies to its posts. Not others' claims: those matter only when
-    you claim something yourself, and `claim -p` warns then."""
+    you claim something yourself, and `claim -p` warns then. Not a post to `all` either, unless it is urgent: those
+    are heads-ups every session sees in status and the [board] line, and waking all of them for one is too much."""
     closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
     return [r for r in board_news(rows, repo, session, since)
-            if r.get("kind") in ("done", "reply") or (r.get("kind") in ("post", "handoff") and r.get("id") not in closed)]
+            if r.get("kind") in ("done", "reply") or (r.get("kind") in ("post", "handoff") and r.get("id") not in closed
+                                                      and (r.get("to") != "all" or r.get("urgent")))]
+
+
+def urgent_first(rows: list[dict]) -> list[dict]:
+    """`rows` with the urgent ones (`agents post --urgent`) first, each part in its order."""
+    return [r for r in rows if r.get("urgent")] + [r for r in rows if not r.get("urgent")]
+
+
+def notify(title: str, text: str) -> bool:
+    """A desktop notification to the user (osascript on macOS, notify-send on Linux): how an urgent post reaches a
+    session nobody is listening for, through its user. $<prefix>_NOTIFY=off turns it off. Never raises; whether it
+    went out."""
+    import shutil
+    import subprocess
+
+    if os.environ.get(config.settings.env("NOTIFY"), "").strip().lower() in ("off", "0", "no"):
+        return False
+    if sys.platform == "darwin" and shutil.which("osascript"):
+        quote = lambda x: '"' + x.replace("\\", "\\\\").replace('"', '\\"') + '"'  # noqa: E731
+        cmd = ["osascript", "-e", f"display notification {quote(text[:240])} with title {quote(title)} sound name \"Glass\""]
+    elif shutil.which("notify-send"):
+        cmd = ["notify-send", "--urgency=critical", title, text[:240]]
+    else:
+        return False
+    try:
+        return subprocess.run(cmd, capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def board_mtime() -> float:
@@ -276,11 +305,12 @@ def board_mtime() -> float:
 
 
 def nudge(argv: list[str]) -> None:
-    """After an agent session's run of the program: one line on stderr if the board got something for its repo since
-    the session last looked (`agents status`, or the last nudge). A session that never read the board gets nothing
-    here: reading it at the start is the rule. Never raises."""
+    """After an agent session's run of the program (`agents` itself, or a wrapper's command that calls this): one line
+    on stderr if the board got something for its repo since the session last looked (`agents status`, or the last
+    nudge), and each urgent post in full before it. Not after `agents status` or `agents wait`: they show the board
+    themselves. A session that never read the board gets nothing here: reading it at the start is the rule. Never raises."""
     session = identity.session_id()
-    if not session or (argv[:1] == ["agents"]):
+    if not session or (argv[:1] == ["agents"] and argv[1:2] in (["status"], ["wait"])):
         return
     try:
         since = _seen().get(session)
@@ -294,6 +324,10 @@ def nudge(argv: list[str]) -> None:
 
         counts = Counter("reply" if r.get("kind") in ("done", "reply") else r.get("kind") for r in news)
         kinds = ", ".join(f"{n} {k}" for k, n in sorted(counts.items()))
+        for r in news:
+            if r.get("urgent"):
+                print(f"[board] URGENT post {r.get('id')} from {r.get('repo') or ''}-{r.get('session') or ''}: {r.get('text', '')}. "
+                      f"Tell the user now. Close it: {config.settings.command} done {r.get('id')} \"...\"", file=sys.stderr)
         print(f"[board] new for {repo} since {since}: {kinds}. Read it: {config.settings.command} status", file=sys.stderr)
         mark_seen(session, news[-1].get("ts"))
     except Exception:  # noqa: BLE001 - a nudge must never break the command it follows

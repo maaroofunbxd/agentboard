@@ -17,6 +17,7 @@ def jdir(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config, "settings", config.Settings())  # the defaults, whatever a wrapper configured
     monkeypatch.setattr(identity, "_session", [])
+    monkeypatch.setenv("AGENTS_NOTIFY", "off")  # no desktop pop-ups from the tests
     monkeypatch.setenv("COLUMNS", "300")  # rich wraps long paths at the terminal's width
     monkeypatch.setenv("AGENTS_BOARD_DIR", str(tmp_path / "board"))
     monkeypatch.setenv("AGENTS_DIR", str(tmp_path / "agents"))
@@ -697,3 +698,47 @@ def test_one_board_for_every_copy_config_file_where_and_merge(jdir, monkeypatch,
     assert j.board_dir() == tmp_path / "wrapped"  # and the wrapper wins over it
     with pytest.raises(ValueError):
         config.write_config({"board_dir": 'a"b'})
+
+
+def test_a_post_to_all_wakes_no_wait_unless_urgent(jdir, monkeypatch):
+    from agentboard import board as j
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
+    monkeypatch.setenv("AGENTS_SESSION", "bbbb")
+    run("agents", "post", "heads-up: new release", "--to", "all")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    assert run("agents", "wait", "--timeout", "0.05", "--every", "0.01").exit_code == 124
+    assert "heads-up: new release" in run("agents", "status").output  # still on the board
+    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")  # status marked it seen, to the second
+    monkeypatch.setenv("AGENTS_SESSION", "bbbb")
+    posted = run("agents", "post", "prod search is down, stop deploys", "--to", "all", "--urgent")
+    assert posted.exit_code == 0 and "No desktop notification" in posted.output  # AGENTS_NOTIFY=off
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    out = run("agents", "wait", "--timeout", "1", "--every", "0.01").output
+    assert "URGENT: tell the user now" in out and "[URGENT post " in out and "stop deploys" in out
+
+
+def test_urgent_posts_come_first_and_in_full_in_the_nudge(jdir, monkeypatch, capsys):
+    from agentboard import board as j
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
+    monkeypatch.setenv("AGENTS_SESSION", "bbbb")
+    j.post("post", "a normal ask", to="tools")
+    j.post("post", "disk full on the board host", to="tools", urgent=True)
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    plain = run("agents", "status").output.splitlines()
+    assert plain[1].startswith("[URGENT post ") and "a normal ask" in plain[2]
+    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
+    j.nudge(["agents", "claim", "x"])  # agents' own commands nudge too, but not status or wait
+    err = capsys.readouterr().err
+    assert err.startswith("[board] URGENT post ") and "disk full on the board host" in err and "2 post" in err
+
+
+def test_notify_is_off_by_variable(jdir, monkeypatch):
+    from agentboard import board as j
+
+    assert j.notify("t", "x") is False

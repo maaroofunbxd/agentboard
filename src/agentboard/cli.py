@@ -19,9 +19,11 @@ this machine, in every repo, shares it (agents.jsonl in the board folder, config
   agents wait                                      # in the background: ends when a request or reply arrives
   agents wait 3fa9c1 --timeout 600                 # ends when post 3fa9c1 gets a reply or its answer
 
-After a session has read the board, a program that calls board.nudge after each run (a wrapper's own command) prints one
-`[board]` line on stderr when something new arrives for its repo (a post, a claim or hand-off from its other
-sessions, a reply). `agents wait`, run in the background, tells a session that runs no such command, in a tool that
+After a session has read the board, `agents` itself and any program that calls board.nudge after each run (a
+wrapper's own command) print one `[board]` line on stderr when something new arrives for its repo (a post, a claim
+or hand-off from its other sessions, a reply), and each urgent post in full. `agents post --urgent` is for what
+can't wait: it wakes `agents wait` even sent to all, and pops up a desktop notification to the user, who can reach
+a session that isn't listening. `agents wait`, run in the background, tells a session that runs no such command, in a tool that
 wakes the agent when a background command ends.
 """
 from __future__ import annotations
@@ -236,6 +238,9 @@ def cmd_post(
     to: str = typer.Option(..., "--to", help="The repo it's for (its folder name: api, web, ...), `all`, or one session "
                            "of a repo as the board names it (api-fd00.60203, or the start of the id: api-fd00)."),
     ticket: Optional[str] = TicketOpt,
+    urgent: bool = typer.Option(False, "--urgent", help="Something is broken or at risk, or the user said so: it wakes "
+                                "every waiting session it's for (even --to all), comes first in status and the [board] "
+                                "line, and pops up a desktop notification to the user. Rare, by convention."),
 ) -> None:
     """Leave something for another repo's sessions, or for one session: a request or a heads-up. They see it when they start.
 
@@ -245,10 +250,16 @@ def cmd_post(
     `agents done ID "the answer, or a link to it"`, and that shows under replies in this repo's status.
     `agents wait ID` in the background ends when the answer (or a reply) lands.
     To one session (--to REPO-SESSION, a name from `agents status` or `agents sessions`): the whole repo still sees
-    it in status, marked for that session, but only that session's `agents wait` and [board] line wake for it."""
+    it in status, marked for that session, but only that session's `agents wait` and [board] line wake for it.
+    A post to `all` wakes no `agents wait` unless it is --urgent: every session still sees it in status."""
     _need_board()
     repo, session = board.resolve_to(board.agent_posts(), to)
-    entry = _post("post", text, ticket, to=repo, to_session=session)
+    entry = _post("post", text, ticket, to=repo, to_session=session, urgent=urgent or None)
+    if urgent:
+        # an idle session can't be interrupted by anything on the board: its user can
+        sent = board.notify(f"URGENT for {addressee(entry)} from {sender(entry)}", text)
+        print("The user got a desktop notification." if sent else "No desktop notification went out (none available, "
+              f"or {config.settings.env('NOTIFY')}=off): tell the user yourself.")
     if session:
         print(f"For {repo}-{session} only (the rest of {repo} sees it marked for that session).")
     if repo != "all":
@@ -327,9 +338,14 @@ def cmd_pickup(ref: str = typer.Argument(..., help="The hand-off id (from `agent
 
 def _sections(where: str, view: dict) -> list[tuple[str, str, list[dict]]]:
     """(title, kind, rows) for status, in the order they're printed."""
-    return [(f"Posts {where}", "post", view["posts"]), ("Claims (open)", "claim", view["claims"]),
+    return [(f"Posts {where}", "post", board.urgent_first(view["posts"])), ("Claims (open)", "claim", view["claims"]),
             ("Hand-offs (open, last 7 days)", "handoff", view["handoffs"]),
             ("Replies to this repo's posts (last 7 days)", "reply", view.get("replies", []))]
+
+
+def _kind(r: dict) -> str:
+    """A line's kind as status and wait print it: `URGENT post` for an urgent one."""
+    return f"URGENT {r['kind']}" if r.get("urgent") else r.get("kind", "")
 
 
 def _what(r: dict) -> str:
@@ -366,7 +382,7 @@ def _print_plain(where: str, view: dict, sections) -> None:
         for r in rows:
             to = f" to {addressee(r)}" if r.get("to") else ""
             stale = " (stale?)" if r.get("stale") else ""
-            print(f"[{kind} {r['id']}] {r.get('ts', '')} from {sender(r)}{_live(r)}{to}{stale}{_this_session(r)}: {_what(r)}")
+            print(f"[{'URGENT ' if r.get('urgent') else ''}{kind} {r['id']}] {r.get('ts', '')} from {sender(r)}{_live(r)}{to}{stale}{_this_session(r)}: {_what(r)}")
     for tree in view.get("worktrees", []):
         print(f"[worktree] {tree}")
     print(f"Close one: {_cmd()} done ID 'what came of it'; take over a hand-off: {_cmd()} pickup ID")
@@ -599,14 +615,17 @@ def cmd_wait(
         time.sleep(every)
     from collections import Counter
 
+    asks = board.urgent_first(asks)
     counts = Counter("reply" if r.get("kind") in ("done", "reply") else r.get("kind") for r in asks)
     print(f"[board] new for {repo}: " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())))
+    if any(r.get("urgent") for r in asks):
+        print("URGENT: tell the user now, before going on with your work.")
     for r in asks:
         if r.get("kind") in ("done", "reply"):
             print(f"[reply {r.get('ref', '')}] {r.get('ts', '')} from {sender(r)}: {r.get('text', '')}")
         else:
             to = f" to {addressee(r)}" if r.get("to") else ""
-            print(f"[{r['kind']} {r['id']}] {r.get('ts', '')} from {sender(r)}{to}: {_what(r)}")
+            print(f"[{_kind(r)} {r['id']}] {r.get('ts', '')} from {sender(r)}{to}: {_what(r)}")
     for line in _wait_advice(asks, repo):
         print(line)
     board.mark_seen(sid, asks[-1].get("ts"))
@@ -693,7 +712,7 @@ def cmd_status(
             table.add_column(col, overflow="fold")
         for r in rows:
             stale = " [yellow](stale?)[/yellow]" if r.get("stale") else ""
-            table.add_row(r["id"], r.get("ts", ""), sender(r) + _live(r) + _this_session(r), addressee(r), _what(r) + stale)
+            table.add_row(("[bold red]URGENT[/bold red] " if r.get("urgent") else "") + r["id"], r.get("ts", ""), sender(r) + _live(r) + _this_session(r), addressee(r), _what(r) + stale)
         console.print(table)
     if view.get("worktrees"):
         console.print("[dim]Worktrees: " + "; ".join(view["worktrees"]) + "[/dim]", highlight=False)
@@ -900,4 +919,7 @@ def main() -> None:
     """`agents`: the board with this module's settings (config.py: the defaults, or what a wrapper configured)."""
     load_wrappers()
     save_wrapper_locations()
-    agents_app(prog_name="agents")
+    try:
+        agents_app(prog_name="agents")
+    finally:  # the [board] line (board.nudge): what's new for this repo, after any command but status and wait
+        board.nudge(["agents", *sys.argv[1:]])
