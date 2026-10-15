@@ -625,3 +625,30 @@ def test_a_tools_row_gives_the_session_an_address(jdir, monkeypatch):
     [row] = json.loads(run("agents", "sessions", "--json").output)
     assert row["resume"] == "claude --resume 0f3a1b2c-full-session-id" and row["address"].endswith("/0f3a1b2c-full-session-id.jsonl")
     assert "claude --resume 0f3a1b2c-full-session-id" in run("agents", "sessions").output
+
+
+def test_post_and_wait_say_when_no_session_of_the_repo_is_live(jdir, monkeypatch):
+    import os
+
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", "ab12.4194303")  # an api session whose process is gone
+    run("agents", "claim", "left long ago")
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    first = run("agents", "post", "first question", "--to", "api").output
+    assert "No session of api is live (its last line 0m ago). An answer waits" in first, first
+    second = run("agents", "post", "second question", "--to", "api").output
+    first_id = next(json.loads(x)["id"] for x in (jdir / "agents.jsonl").read_text().splitlines() if "first question" in x)
+    assert f"1 other open post(s) to it, the oldest ({first_id}) waiting 0m" in second, second
+    assert "never written to the board" in run("agents", "post", "anyone?", "--to", "nobody").output
+    assert "live" not in run("agents", "post", "heads-up", "--to", "all").output
+    waited = run("agents", "wait", first_id, "--timeout", "0.01", "--every", "0.01").output
+    assert waited.startswith("No session of api is live") and "1 other open post(s)" in waited, waited
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", f"p{os.getpid()}")  # an api session that runs: this test's process
+    run("agents", "claim", "here now")
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    assert f"Live: api-p{os.getpid()};" in run("agents", "post", "third", "--to", "api").output

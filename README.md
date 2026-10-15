@@ -50,6 +50,10 @@ agents setup                          # copy <agents dir>/global.md into each in
 - **Live or ended:** a session's id ends in its agent's process id, so `status` marks a session whose process still
   runs `(live)`, and `sessions` says `live`, `ended`, or `unknown` (an id with no process in it). A process younger
   than the session's first line is another one that got the same pid, so it counts as ended.
+- **Anyone there?** `post --to REPO` and `wait ID` (on a post you sent) say right away whether a session of that
+  repo is live, when it last wrote, and how long its oldest open post has waited. When none is live, an answer waits
+  until someone starts one there, so tell the user then rather than waiting. A session that never wrote to the board
+  isn't seen.
 - **Where the conversation is:** a line carries the full session id its tool exports (`tool_session`); a tool's row
   can say where it keeps that conversation (`address`) and how to reopen it (`resume`), and `sessions` prints it.
 

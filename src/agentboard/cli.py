@@ -245,7 +245,26 @@ def cmd_post(
     entry = _post("post", text, ticket, to=repo, to_session=session)
     if session:
         print(f"For {repo}-{session} only (the rest of {repo} sees it marked for that session).")
+    if repo != "all":
+        print(presence_note(repo, session, skip=entry["id"]))
     print(f"For an answer, wait in the background: {_cmd()} wait {entry['id']}")
+
+
+def presence_note(repo: str, session: Optional[str] = None, skip: Optional[str] = None) -> str:
+    """One line for the asker: who of `repo` (or of `repo-session`) is there to read a post (board.presence), and how
+    long its other open posts have waited, so nobody waits blind on a repo with no session running."""
+    p = board.presence(board.agent_posts(), repo, session, skip=skip)
+    name = f"{repo}-{session}" if session else repo
+    oldest = p["waiting"][0] if p["waiting"] else None
+    waiting = (f"; {len(p['waiting'])} other open post(s) to it, the oldest ({oldest['id']}) waiting {_ago(oldest.get('ts'))}"
+               if oldest else "")
+    if p["live"]:
+        return f"Live: {', '.join(p['live'])}{waiting}."
+    if p["unknown"]:
+        return f"Maybe there (no process to check): {', '.join(p['unknown'])}{waiting}."
+    last = f"its last line {_ago(p['last'])} ago" if p["last"] else "it has never written to the board"
+    return (f"No session of {name} is live ({last}){waiting}. An answer waits until someone starts a session there: "
+            "tell the user now, not after waiting. (A session that never wrote to the board isn't seen.)")
 
 
 @agents_app.command("done")
@@ -596,6 +615,9 @@ def _wait_thread(ref: str, timeout: float, every: float) -> None:
     lines = board.thread(board.agent_posts(), ref)
     if not lines:
         raise typer.BadParameter(f"no post, claim or hand-off is {ref!r}; `{_cmd()} status --all` lists them", param_hint="REF")
+    head = lines[0]
+    if head.get("kind") == "post" and head.get("to") not in (None, "all", identity.here()):
+        print(presence_note(head["to"], head.get("to_session"), skip=ref))  # the asker's side: is anyone there?
     mine = [i for i, r in enumerate(lines) if me and r.get("session") == me]
     after = mine[-1] + 1 if mine else 1  # by position: the board's times are to the second
     start, seen_mtime = time.monotonic(), -1.0

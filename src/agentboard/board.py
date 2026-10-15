@@ -140,6 +140,26 @@ def sessions(rows: list[dict], repo: Optional[str] = None, now: Optional[datetim
     return sorted(keep, key=lambda e: e["last"] or "", reverse=True)
 
 
+def presence(rows: list[dict], repo: str, session: Optional[str] = None, skip: Optional[str] = None,
+             now: Optional[datetime.datetime] = None) -> dict:
+    """Whether anyone is there to answer a post to `repo` (or to one session of it, `session`): its live sessions,
+    those whose liveness is unknown (an id with no process) that wrote in the last day, the time of its last line,
+    and its open posts (not to `all`, not the post `skip`), oldest first. Only sessions that have written to the board
+    are seen: one that runs but never wrote a line is not."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    day = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ttl_ts = (now - POST_TTL).strftime("%Y-%m-%dT%H:%M:%SZ")
+    mine = [e for e in sessions(rows, repo=repo, now=now, days=30) if not session or e["session"].startswith(session)]
+    closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
+    waiting = [r for r in rows if r.get("kind") == "post" and r.get("to") == repo and r.get("id") not in closed
+               and r.get("id") != skip and r.get("ts", "") >= ttl_ts and (not session or r.get("to_session", "").startswith(session)
+                                                                          or not r.get("to_session"))]
+    return {"live": [e["name"] for e in mine if e["live"]],
+            "unknown": [e["name"] for e in mine if e["live"] is None and (e["last"] or "") >= day],
+            "last": max((r.get("ts", "") for r in rows if r.get("repo") == repo), default=None),
+            "waiting": waiting}
+
+
 def agents_view(rows: list[dict], now: Optional[datetime.datetime] = None, repo: Optional[str] = None) -> dict:
     """Open claims (stale after STALE_AFTER without a done), open hand-offs of the last week, and open posts of
     the last POST_TTL. With `repo`, only the posts addressed to it (or to `all`); `elsewhere` counts the rest."""
