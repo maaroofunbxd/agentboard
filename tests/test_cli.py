@@ -590,7 +590,7 @@ def test_sessions_live_or_ended_and_whoami_names_the_process(jdir, monkeypatch):
     monkeypatch.setattr(identity, "here", lambda: "api")
     monkeypatch.setenv("AGENTS_SESSION", f"p{os.getpid()}")  # this test's process: live
     result = run("agents", "whoami")
-    assert f"process {os.getpid()}" in result.output
+    assert f"process {os.getpid()}" in result.output and f"board: {jdir / 'agents.jsonl'}" in result.output
     run("agents", "claim", "mine, still running")
     monkeypatch.setenv("AGENTS_SESSION", "ab12.4194303")  # no such process (pid_max is lower on macOS and Linux)
     run("agents", "handoff", "left behind")

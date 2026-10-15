@@ -172,9 +172,11 @@ def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
     commands), else the session id its tool exports (tools.py), else `p<the agent's process>`. The file
     is AGENTS.local.md in the repo (`agents link`), else <agents dir>/<repo>.md."""
     repo = identity.here()
+    where = board.store()
     info = {"name": identity.session_name(repo), "session": identity.session_id(), "actor": identity.actor(), "repo": repo,
             "branch": identity.git_here("branch", "--show-current") or None, "pid": identity.pid_of(identity.session_id()),
-            "tool_session": identity.tool_session() or None}
+            "tool_session": identity.tool_session() or None,
+            "board": str(where.path(board.AGENTS)) if hasattr(where, "path") else type(where).__name__ if where else None}
     text, source = local_file(repo)
     if json_output:
         print_json({**info, "local": text, "local_from": source})
@@ -184,6 +186,8 @@ def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
     else:
         process = f", process {info['pid']}" if info["pid"] else ""
         console.print(f"{info['name']}  ({info['actor']}, {'/'.join(x for x in (repo, info['branch']) if x)}{process})", highlight=False)
+    # which board this copy of the command reads: two installs (one with a wrapper, one without) can read different ones
+    console.print(f"board: {info['board'] or config.settings.off_reason}", highlight=False)
     if text:
         print(f"\nThe user's own file for this repo ({source}): follow 'How I want answers'; ask in the shape of "
               "'What agents need from me', only for what you can't find yourself, and add to that section when you "
