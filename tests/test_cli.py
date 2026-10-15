@@ -20,6 +20,8 @@ def jdir(tmp_path, monkeypatch):
     monkeypatch.setenv("COLUMNS", "300")  # rich wraps long paths at the terminal's width
     monkeypatch.setenv("AGENTS_BOARD_DIR", str(tmp_path / "board"))
     monkeypatch.setenv("AGENTS_DIR", str(tmp_path / "agents"))
+    monkeypatch.setenv("AGENTS_CONFIG", str(tmp_path / "config.toml"))  # never the user's own
+    monkeypatch.setattr(config, "fallback_board", lambda: tmp_path / "fallback")
     for var, _ in agent_tools.detect_env():
         monkeypatch.delenv(var, raising=False)
     for var in ("AGENTS_SESSION", "AGENTS_AGENT_PID", "GITHUB_ACTIONS", "GITHUB_ACTOR"):
@@ -652,3 +654,46 @@ def test_post_and_wait_say_when_no_session_of_the_repo_is_live(jdir, monkeypatch
     monkeypatch.setattr(identity, "here", lambda: "tools")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
     assert f"Live: api-p{os.getpid()};" in run("agents", "post", "third", "--to", "api").output
+
+
+def test_one_board_for_every_copy_config_file_where_and_merge(jdir, monkeypatch, tmp_path):
+    from agentboard import board as j
+    from agentboard import cli, identity
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    # the config file is read when the variable is unset; the variable wins over it
+    monkeypatch.delenv("AGENTS_BOARD_DIR")
+    config.write_config({"board_dir": str(tmp_path / "real")})
+    assert j.board_dir() == tmp_path / "real"
+    monkeypatch.setenv("AGENTS_BOARD_DIR", str(jdir))
+    assert j.board_dir() == jdir
+    # a stray board (a copy without the wrapper wrote there) is warned about, then merged in and set aside
+    monkeypatch.setenv("AGENTS_BOARD_DIR", str(tmp_path / "fallback"))
+    run("agents", "handoff", "left on the stray board")
+    monkeypatch.setenv("AGENTS_BOARD_DIR", str(jdir))
+    run("agents", "claim", "on the real board")
+    assert "another board with 1 line(s) is in" in run("agents", "status").output  # CliRunner mixes in stderr
+    assert json.loads(run("agents", "where", "--json").stdout)["other_boards"][0]["lines"] == 1
+    result = run("agents", "where", "--merge", str(tmp_path / "fallback"))
+    assert result.exit_code == 0 and "1 line(s) copied" in result.output, result.output
+    assert {r["text"] for r in j.agent_posts()} == {"left on the stray board", "on the real board"}
+    assert not (tmp_path / "fallback" / "agents.jsonl").exists() and "another board" not in run("agents", "status").output
+    assert run("agents", "where", "--merge", str(jdir)).exit_code != 0  # not the board it reads
+    # --save writes this copy's locations; a wrapper's first run writes its own only when there's no file yet
+    (tmp_path / "config.toml").unlink()
+    assert run("agents", "where", "--save").exit_code == 0 and config.read_config()["board_dir"] == str(jdir)
+    (tmp_path / "config.toml").unlink()
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    cli.save_wrapper_locations()
+    assert not (tmp_path / "config.toml").exists()  # no wrapper: nothing to save
+    monkeypatch.setattr(config, "settings", config.configure(board_dir=lambda: tmp_path / "wrapped"))
+    cli.save_wrapper_locations()
+    assert config.read_config()["board_dir"] == str(tmp_path / "wrapped")
+    config.write_config({"board_dir": "/elsewhere"})
+    cli.save_wrapper_locations()
+    assert config.read_config()["board_dir"] == "/elsewhere"  # an existing file is never overwritten
+    assert j.board_dir() == tmp_path / "wrapped"  # and the wrapper wins over it
+    with pytest.raises(ValueError):
+        config.write_config({"board_dir": 'a"b'})

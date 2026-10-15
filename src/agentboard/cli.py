@@ -37,6 +37,7 @@ from rich.table import Table
 
 from agentboard import board, config, identity
 from agentboard import tools as agent_tools
+from agentboard.store import FileStore
 
 console = Console()
 
@@ -188,6 +189,7 @@ def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
         console.print(f"{info['name']}  ({info['actor']}, {'/'.join(x for x in (repo, info['branch']) if x)}{process})", highlight=False)
     # which board this copy of the command reads: two installs (one with a wrapper, one without) can read different ones
     console.print(f"board: {info['board'] or config.settings.off_reason}", highlight=False)
+    _warn_other_boards()
     if text:
         print(f"\nThe user's own file for this repo ({source}): follow 'How I want answers'; ask in the shape of "
               "'What agents need from me', only for what you can't find yourself, and add to that section when you "
@@ -661,6 +663,7 @@ def cmd_status(
         raise typer.BadParameter(f"no session id: set {config.settings.env('SESSION')}=<name> on the commands (a tool in agentboard/tools.py gets one by itself)",
                                  param_hint="--this-session")
     repo = None if all_repos or this_session else identity.here()
+    _warn_other_boards()
     view = board.agents_view(board.agent_posts(), repo=repo)
     if this_session:
         for key in ("posts", "claims", "handoffs", "replies"):
@@ -715,6 +718,122 @@ def _ago(ts: Optional[str], now: Optional[float] = None) -> str:
     if seconds >= 3600:
         return f"{seconds // 3600}h{(seconds % 3600) // 60}m"
     return f"{seconds // 60}m"
+
+
+def _board_folder() -> Optional[Path]:
+    """The folder of the board this copy reads, when it is the plain file (store.FileStore)."""
+    where = board.store()
+    return getattr(where, "folder", None)
+
+
+def other_boards() -> list[tuple[Path, int]]:
+    """Board folders other copies of `agents` may read (the config file's, $AGENTS_BOARD_DIR's, the fallback
+    ~/.agents/board) that aren't this one and hold lines: (folder, how many)."""
+    import os
+
+    here = _board_folder()
+    candidates = [config.read_config().get("board_dir"), os.environ.get("AGENTS_BOARD_DIR", "").strip(), str(config.fallback_board())]
+    out, seen = [], set()
+    for c in candidates:
+        if not c:
+            continue
+        folder = Path(c).expanduser()
+        key = folder.resolve()
+        if key in seen or (here is not None and key == here.resolve()):
+            continue
+        seen.add(key)
+        n = sum(len(FileStore(folder).lines(s)) for s in (board.AGENTS, "board"))
+        if n:
+            out.append((folder, n))
+    return out
+
+
+def _warn_other_boards() -> None:
+    """On stderr: a second board with lines, which another copy of `agents` reads or once wrote (README, "One board")."""
+    for folder, n in other_boards():
+        print(f"WARNING: another board with {n} line(s) is in {folder}; this one reads {_board_folder()}. A copy of "
+              f"`{_cmd()}` without your wrapper or config file wrote there. `{_cmd()} where` explains; "
+              f"`{_cmd()} where --merge {folder}` copies its lines here, `--archive {folder}` sets it aside.", file=sys.stderr)
+
+
+@agents_app.command("where")
+def cmd_where(
+    save: bool = typer.Option(False, "--save", help="Write this copy's locations to the config file, for every other copy of agents."),
+    merge: Optional[Path] = typer.Option(None, "--merge", help="Copy the lines of the board in this folder that this board "
+                                         "lacks into it, then set that file aside (agents.jsonl.merged-<date>)."),
+    archive: Optional[Path] = typer.Option(None, "--archive", help="Set the board in this folder aside (agents.jsonl.archived-<date>), copying nothing."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Where this copy of agents keeps the board, its agent folder and its seen file, and why; other boards with lines.
+
+    Every copy of `agents` (a wrapper's, or agentboard's own in a venv) should read one board. Without a wrapper the
+    locations come from $AGENTS_BOARD_DIR / $AGENTS_DIR, else the config file (config.config_file()), else
+    ~/.agents. A wrapper's own copy writes its locations to the config file on its first run; --save does it now."""
+    import datetime
+
+    folder = _board_folder()
+    info = {"board": str(folder) if folder else None, "agents_dir": str(agents_dir()), "seen_file": str(config.settings.seen_file()),
+            "from": "a wrapper's settings" if config.wrapped() else "agentboard's defaults (env, config file, ~/.agents)",
+            "config_file": str(config.config_file()), "config": config.read_config(),
+            "other_boards": [{"folder": str(f), "lines": n} for f, n in other_boards()]}
+    stamp = datetime.date.today().isoformat()
+    for src, verb in ((merge, "merged"), (archive, "archived")):
+        if src is None:
+            continue
+        src = src.expanduser()
+        if folder is None or src.resolve() == folder.resolve():
+            raise typer.BadParameter(f"{src} is the board this copy reads", param_hint=f"--{verb[:-1]}")
+        files = [FileStore(src).path(s) for s in (board.AGENTS, "board") if FileStore(src).path(s).is_file()]
+        if not files:
+            raise typer.BadParameter(f"no board file in {src}", param_hint=f"--{verb[:-1]}")
+        added = 0
+        if verb == "merged":
+            have = {(r.get("id"), r.get("kind"), r.get("ts")) for r in board.agent_posts()}
+            for row in sorted((r for f in files for r in FileStore(src).lines(f.stem)), key=lambda r: r.get("ts", "")):
+                if (row.get("id"), row.get("kind"), row.get("ts")) not in have:
+                    FileStore(folder).append(board.AGENTS, row)
+                    added += 1
+        for f in files:
+            f.rename(f.with_name(f"{f.name}.{verb}-{stamp}"))
+        console.print(f"[green]{verb.capitalize()}[/green] {src}: {added} line(s) copied into {folder}; "
+                      f"{', '.join(f.name + '.' + verb + '-' + stamp for f in files)} kept there.", highlight=False)
+        return
+    if save:
+        if folder is None:
+            raise typer.BadParameter("this copy keeps the board in no folder (another store): nothing to save", param_hint="--save")
+        try:
+            path = config.write_config({"board_dir": folder, "agents_dir": info["agents_dir"], "seen_file": info["seen_file"]})
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--save") from exc
+        console.print(f"[green]Saved[/green] to {path}: every copy of `{_cmd()}` without a wrapper now reads {folder}.", highlight=False)
+        return
+    if json_output:
+        print_json(info)
+        return
+    for key in ("board", "agents_dir", "seen_file", "from", "config_file"):
+        print(f"{key}: {info[key] or config.settings.off_reason}")
+    if not info["config"]:
+        print(f"  (no config file yet: `{_cmd()} where --save` writes these locations there)")
+    for o in info["other_boards"]:
+        print(f"other board: {o['folder']} ({o['lines']} line(s)): --merge or --archive it")
+
+
+def save_wrapper_locations() -> None:
+    """The first run of `agents` with a wrapper writes the wrapper's locations to the config file, so agentboard's own
+    copies (a venv without the wrapper) read the same board. Never when the file exists (a wrapper's run on a
+    temporary board, its tests say, must not move everyone), under pytest or in CI. Never raises."""
+    import os
+
+    if not config.wrapped() or config.config_file().exists() or os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("CI"):
+        return
+    try:
+        folder = _board_folder()
+        if folder is None:
+            return
+        path = config.write_config({"board_dir": folder, "agents_dir": agents_dir(), "seen_file": config.settings.seen_file()})
+        print(f"agentboard: wrote {path} (board {folder}), so every copy of `{_cmd()}` reads this board.", file=sys.stderr)
+    except Exception:  # noqa: BLE001 - never stop the command over it
+        return
 
 
 @agents_app.command("sessions")
@@ -780,4 +899,5 @@ def load_wrappers() -> None:
 def main() -> None:
     """`agents`: the board with this module's settings (config.py: the defaults, or what a wrapper configured)."""
     load_wrappers()
+    save_wrapper_locations()
     agents_app(prog_name="agents")
