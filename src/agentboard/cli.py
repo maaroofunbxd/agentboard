@@ -15,6 +15,7 @@ this machine, in every repo, shares it (agents.jsonl in the board folder, config
   agents pickup 7c21e0                             # take over a hand-off: it becomes your claim
   agents done 3fa9c1 "merged 81480d2"              # on a post: the answer its sender sees
   agents reply 3fa9c1 "which region?"              # keep talking on a post's (or claim's, hand-off's) thread, without closing it
+  agents worktrees --prune                         # which worktrees of every repo can go (--yes removes them)
   agents sessions                                  # the sessions of this repo: live or ended, last seen, what they hold open
   agents wait                                      # in the background: ends when a request or reply arrives
   agents wait 3fa9c1 --timeout 600                 # ends when post 3fa9c1 gets a reply or its answer
@@ -37,7 +38,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from agentboard import board, config, identity
+from agentboard import board, config, identity, worktrees
 from agentboard import tools as agent_tools
 from agentboard.store import FileStore
 
@@ -385,6 +386,8 @@ def _print_plain(where: str, view: dict, sections) -> None:
             print(f"[{'URGENT ' if r.get('urgent') else ''}{kind} {r['id']}] {r.get('ts', '')} from {sender(r)}{_live(r)}{to}{stale}{_this_session(r)}: {_what(r)}")
     for tree in view.get("worktrees", []):
         print(f"[worktree] {tree}")
+    if view.get("removable_worktrees"):
+        print(f"{view['removable_worktrees']} worktree(s) can be removed: {_cmd()} worktrees --prune")
     print(f"Close one: {_cmd()} done ID 'what came of it'; take over a hand-off: {_cmd()} pickup ID")
 
 
@@ -691,6 +694,7 @@ def cmd_status(
         view["elsewhere"] = 0
     if repo:
         view["worktrees"] = _worktrees()
+        view["removable_worktrees"] = _removable_here(repo)
     if not this_session:  # --this-session hides others' posts, so it mustn't swallow the [board] nudge for them
         board.mark_seen(identity.session_id())  # the nudge only tells this session about what comes after
     if json_output:
@@ -716,8 +720,76 @@ def cmd_status(
         console.print(table)
     if view.get("worktrees"):
         console.print("[dim]Worktrees: " + "; ".join(view["worktrees"]) + "[/dim]", highlight=False)
+    if view.get("removable_worktrees"):
+        console.print(f"[yellow]{view['removable_worktrees']} worktree(s) can be removed: {_cmd()} worktrees --prune[/yellow]")
     tail = f"{view['elsewhere']} post(s) for other repos: --all. " if view["elsewhere"] else ""
     console.print(f"[dim]{tail}close one: {_cmd()} done ID 'what came of it'; take over a hand-off: {_cmd()} pickup ID[/dim]")
+
+
+def _open_items(rows: list[dict]) -> list[dict]:
+    view = board.agents_view(rows)
+    return view["claims"] + view["handoffs"]
+
+
+def _removable_here(repo: str) -> int:
+    """How many worktrees of the repo you're in `worktrees --prune` would remove (no sizes, no gh: status stays fast)."""
+    root = worktrees.main_checkout()
+    if not root:
+        return 0
+    rows = board.agent_posts()
+    found = worktrees.inspect(repo, Path(root), _open_items(rows), board.sessions(rows, repo=repo, days=30), sizes=False, use_gh=False)
+    return sum(e["removable"] for e in found)
+
+
+@agents_app.command("worktrees")
+def cmd_worktrees(
+    all_repos: bool = typer.Option(True, "--all/--here", help="Every repo the board knows (default), or only the one you're in."),
+    prune: bool = typer.Option(False, "--prune", help="Say which worktrees would be removed (worktree, local branch, origin branch); --yes does it."),
+    yes: bool = typer.Option(False, "--yes", help="With --prune: remove them."),
+    no_gh: bool = typer.Option(False, "--no-gh", help="Don't ask gh about merged PRs (squash merges then count as not merged)."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """The worktrees of every repo the board knows: branch, merged, dirty, unpushed, age, size, who holds it.
+
+    One can go only when its branch is merged into the primary branch (git, or a merged PR), it has no uncommitted
+    changes or commits on no remote, no open claim or hand-off names its branch or path, and no live session is on
+    its branch. `--prune` lists what it would remove and why the rest stays; `--prune --yes` removes them."""
+    rows = board.agent_posts()
+    roots = worktrees.repo_roots(rows)
+    here, root = identity.here(), worktrees.main_checkout()
+    if here and root:
+        roots[here] = Path(root)
+    if not all_repos:
+        roots = {here: roots[here]} if here in roots else {}
+    items, live = _open_items(rows), board.sessions(rows, days=30)
+    found = [e for repo, r in sorted(roots.items()) for e in worktrees.inspect(repo, r, items, live, use_gh=not no_gh)]
+    if prune and yes:
+        for e in found:
+            if e["removable"]:
+                e["done"] = worktrees.remove(e)
+    if json_output:
+        print_json(found)
+        return
+    if not found:
+        console.print(f"[dim]No worktrees besides the main checkouts of {', '.join(sorted(roots)) or 'no repo'}.[/dim]")
+        return
+    for e in found:
+        size = f", {e['size_mb']} MB" + (f" (.venv {e['venv_mb']} MB)" if e.get("venv_mb") else "") if e.get("size_mb") is not None else ""
+        age = f", {e['age_days']}d old" if e.get("age_days") is not None else ""
+        state = ", ".join(x for x in ("merged" if e["merged"] else "not merged", "dirty" if e["dirty"] else "",
+                                      f"{e['unpushed']} unpushed" if e["unpushed"] else "", "missing" if e["missing"] else "") if x)
+        head = f"{e['repo']}  {e['branch'] or '(detached)'}  {e['path']}: {state}{age}{size}"
+        if prune:
+            verdict = "; ".join(e["done"]) if e.get("done") else "would remove" if e["removable"] else "keep: " + "; ".join(e["why"])
+            head += f"  -> {verdict}"
+        elif e["held_by"]:
+            head += f"  (held by {', '.join(e['held_by'])})"
+        print(head)
+    n, mb = sum(e["removable"] for e in found), sum(e.get("size_mb") or 0 for e in found if e["removable"])
+    if prune and not yes and n:
+        print(f"{n} worktree(s) ({mb} MB) would be removed: {_cmd()} worktrees --prune --yes")
+    elif not prune and n:
+        print(f"{n} worktree(s) ({mb} MB) can be removed: {_cmd()} worktrees --prune")
 
 
 def _ago(ts: Optional[str], now: Optional[float] = None) -> str:

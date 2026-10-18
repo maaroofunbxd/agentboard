@@ -30,6 +30,7 @@ agents pickup ID                      # take over a hand-off: it becomes your cl
 agents done ID "merged 81480d2"       # close a claim / hand-off / post; on a post it is the answer
 agents reply ID "which region?"       # keep talking on a thread (a post, a claim or a hand-off) without closing it
 agents sessions                       # this repo's sessions: live or ended, last seen, what each holds open, how to reopen it
+agents worktrees [--prune [--yes]]    # every repo's worktrees: merged, dirty, unpushed, age, size, holder; prune removes the merged, clean, unheld ones
 agents wait                           # in the background: ends when a request or reply arrives for this repo
 agents wait ID --timeout 600          # ends when post (or claim, hand-off) ID gets a reply or its answer
 agents link                           # AGENTS.local.md in this repo: your own file, a symlink, ignored by git here

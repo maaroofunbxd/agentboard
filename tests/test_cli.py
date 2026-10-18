@@ -742,3 +742,29 @@ def test_notify_is_off_by_variable(jdir, monkeypatch):
     from agentboard import board as j
 
     assert j.notify("t", "x") is False
+
+
+def test_agents_worktrees_prune_only_merged_clean_unheld(jdir, tmp_path, monkeypatch):
+    import subprocess
+
+    def git(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
+
+    repo = tmp_path / "api"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "start")
+    for name in ("done-br", "held-br", "wip-br"):
+        git(repo, "worktree", "add", "-b", name, str(tmp_path / f"api-{name}"))
+    git(tmp_path / "api-wip-br", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "wip")
+    monkeypatch.chdir(repo)
+    assert run("agents", "claim", "fix, branch held-br").exit_code == 0
+    found = {e["branch"]: e for e in json.loads(run("agents", "worktrees", "--no-gh", "--json").output)}
+    assert found["done-br"]["removable"]
+    assert not found["held-br"]["removable"] and any("claim" in w for w in found["held-br"]["why"])
+    assert "not merged into main" in found["wip-br"]["why"] and found["wip-br"]["unpushed"] == 1
+    assert "1 worktree(s) can be removed" in run("agents", "status").output
+    out = run("agents", "worktrees", "--no-gh", "--prune").output
+    assert "would remove" in out and (tmp_path / "api-done-br").is_dir()
+    run("agents", "worktrees", "--no-gh", "--prune", "--yes")
+    assert not (tmp_path / "api-done-br").exists() and (tmp_path / "api-held-br").is_dir()

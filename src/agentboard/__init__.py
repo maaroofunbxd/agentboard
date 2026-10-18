@@ -9,4 +9,4 @@
 - cli.py: the typer app and the `agents` console script (a wrapper can mount the app as a subcommand)
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

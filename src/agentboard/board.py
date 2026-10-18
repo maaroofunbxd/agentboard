@@ -77,10 +77,17 @@ def post(kind: str, text: str, ref: Optional[str] = None, commands: list[str] | 
         raise ValueError("a post is for a repo's sessions: --to REPO (api, web, ...), --to all, or --to REPO-SESSION")
     entry = {"kind": kind, "id": uuid.uuid4().hex[:6], "text": text, "repo": identity.here(), "session": identity.session_id(), "to": to,
              "to_session": to_session, "tool_session": identity.tool_session() or None,
-             "branch": identity.git_here("branch", "--show-current") or None, "ref": ref, "commands": commands or None, **fields}
+             "branch": identity.git_here("branch", "--show-current") or None, "root": _root(), "ref": ref, "commands": commands or None, **fields}
     entry = {k: v for k, v in entry.items() if v}
     _append(entry)
     return entry
+
+
+def _root() -> Optional[str]:
+    """The main checkout of the repo the line comes from, so `agents worktrees` finds every repo's worktrees."""
+    from agentboard import worktrees
+
+    return worktrees.main_checkout()
 
 
 def agent_posts() -> list[dict]:
