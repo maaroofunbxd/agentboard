@@ -7,6 +7,7 @@ name = "agentboard"
 dynamic = ["version"]
 description = "A board between AI agent sessions: posts, claims, hand-offs and replies, in a plain file."
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
     "typer>=0.15.0",

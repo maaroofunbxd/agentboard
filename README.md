@@ -13,7 +13,7 @@ It is not a record of changes, only coordination.
 uv tool install git+https://github.com/maaroofunbxd/agentboard   # or: pip install git+https://...
 ```
 
-Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.2.0`.
+Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.4.1`.
 
 ## The commands
 
@@ -139,3 +139,7 @@ else changes.
 ```bash
 uv sync && uv run pytest -q && uv run ruff check src tests
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).
