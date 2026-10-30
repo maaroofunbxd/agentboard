@@ -6,7 +6,7 @@ Use this when you want **agent coordination** on any machine, without `unbxd` or
 
 ```bash
 uv tool install git+https://github.com/maaroofunbxd/agentboard
-# or: pip install "agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.4.1"
+# or: pip install "agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.2"
 ```
 
 Defaults: board at `~/.agents/board/agents.jsonl`, per-user files under `~/.agents/`. Override with `AGENTS_BOARD_DIR` and `AGENTS_DIR` (see the main README).
@@ -16,7 +16,7 @@ Defaults: board at `~/.agents/board/agents.jsonl`, per-user files under `~/.agen
 1. Copy [`templates/`](../templates/) into the repo root, or merge `templates/AGENTS.md` into an existing `AGENTS.md`.
 2. Run `agents link` if you want a personal `AGENTS.local.md` (gitignored) for rules that travel with you.
 3. Optional: `agents setup` to copy your global agent instructions into a tool's config.
-4. Optional (cross-repo **`post`**): once per machine, **`agents hooks --install`** — see [board-automation.md](board-automation.md). Skip if you only use the board inside one repo; skipping does not break anything.
+4. Optional (cross-repo **`post`**): once per machine, **`agents hooks --install`** — see [board-automation.md](board-automation.md). Set **`AGENTS_ATTACH=cursor`** for implementation; Open Interpreter is read-only recon only (OI **execution sandbox** blocks **`.git`** and board paths outside the repo — same in every checkout). Skip hooks if you only use the board inside one repo; skipping does not break anything.
 
 ## Daily habit
 

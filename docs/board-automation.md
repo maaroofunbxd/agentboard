@@ -51,6 +51,27 @@ On an offline-repo **`post`**: **`<repo>/.agents/sandbox-<id>/`**, **`~/work/age
 
 **Do not use Open Interpreter to implement board posts.** It is a poor fit for commits, worktrees, and closing the board: subprocess sandboxes often deny writes to **`.git`** and **`agents.jsonl`**, and attach starts in the repo's **main checkout** unless you opened a worktree yourself. Use **`AGENTS_ATTACH=cursor`** (or open the sandbox **POST.md** in Cursor), do real edits on a **branch/worktree**, then run **`agents done ID "…"`** from your normal terminal. Interpreter attach is OK for **read-only** exploration before you switch to Cursor; **`AGENTS_HEADLESS_AUTO=on`** is the only supported unattended Interpreter path (read-only on **`post`**, not attach).
 
+**Model and permissions are Open Interpreter's, not agentboard's.** **`agents attach`** only runs `interpreter` / `interpreter exec -- …` with `cwd` set to the repo; it does not set which LLM runs (use Interpreter's **`/model`** or `model` in **`config.toml`**). It also does **not** pass **`--sandbox`** or **`--permissions`** — you get whatever defaults are in Open Interpreter's config (often **`workspace-write`** + **`on-request`** approvals). Optional: **`AGENTS_INTERPRETER_CMD`** to wrap the exec step (e.g. `interpreter --sandbox read-only exec --`).
+
+#### Open Interpreter execution sandbox (≠ agentboard sandbox)
+
+Two different “sandboxes” show up in this flow:
+
+| Name | What it is |
+|------|------------|
+| **agentboard sandbox** | **`.agents/sandbox-<post-id>/`** on disk — POST.md and context for attach. |
+| **Open Interpreter sandbox** | OS-enforced limits on **shell commands the model runs** inside Interpreter. |
+
+Open Interpreter's local exec uses modes such as **`read-only`**, **`workspace-write`**, and **`danger-full-access`**, plus approval policies (**`untrusted`**, **`on-request`**, **`never`**). Inspect or change them in the TUI with **`/permissions`**, or in [config](https://www.openinterpreter.com/docs/terminal/config-reference) (`sandbox_mode`, `default_permissions`, `approval_policy`). On macOS enforcement uses Seatbelt-style profiles; denied writes often show as **`Operation not permitted`**.
+
+Typical attach pain points (even with a “good” model):
+
+- **`.git/`** is treated as a sensitive control directory — **`git worktree`**, new branches, and ref updates may fail under **`workspace-write`** until you widen policy or use **`danger-full-access`** in a environment you trust ([OI sandbox docs](https://www.openinterpreter.com/docs/terminal/sandbox)).
+- **`~/work/journal/agents.jsonl`** is usually **outside** the repo workspace root — **`agents done`** from inside Interpreter may fail to append the board; run **`agents done`** from your normal shell after real work.
+- **`--safe`** / **`safe_mode`** in Open Interpreter is a **different** experimental layer (Semgrep scan, no auto-run) — not the same as **`sandbox_mode`**. Do not confuse the two when debugging.
+
+**Recommended for board attach:** **`read-only`** (or Cursor) for recon; implement with **`AGENTS_ATTACH=cursor`**. If you insist on Interpreter for writes, use an isolated checkout, explicit **`--add-dir`** for any extra roots, and only **`danger-full-access`** when you accept full local risk — agentboard does not configure that for you.
+
 **`export` before `agents post` beats `~/work/agents/headless.env.sh`** for **`AGENTS_ATTACH`** and **`AGENTS_HEADLESS_AUTO`**.
 
 ```bash

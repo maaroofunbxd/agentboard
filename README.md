@@ -13,7 +13,7 @@ It is not a record of changes, only coordination.
 uv tool install git+https://github.com/maaroofunbxd/agentboard   # or: pip install git+https://...
 ```
 
-Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.4.1`.
+Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.2`.
 
 **Portable workflow (no company CLI):** [docs/portable-setup.md](docs/portable-setup.md) — install, per-repo
 [`templates/`](templates/), and how this relates to optional [opsjournal](https://github.com/maaroofunbxd/opsjournal)
@@ -86,7 +86,7 @@ Use `agents status --history` for the full event history in the selected repo sc
 | `AGENTS_ATTACH` | cursor | Tool for **`agents attach`**. **`--plain`** = no inject (both modes). Interpreter: **`--exec-only`** |
 | `AGENTS_HEADLESS_AUTO` | off | **on** = auto read-only on **post** (only with **`AGENTS_ATTACH=interpreter`**) |
 
-**Attach — use Cursor to implement, not Open Interpreter.** Default **`AGENTS_ATTACH=cursor`**: open the repo (and sandbox **POST.md**), work on a **branch/worktree**, commit, then **`agents done`** from your shell. **Do not use Open Interpreter for writing code** on board work: it often runs with a restricted sandbox (no **`.git`**, no **`~/work/journal`**), cwd is usually the **main checkout**, and **`agents done`** from inside it may fail silently. Interpreter is fine for **read-only** recon (**`rg`**, docs, **`unbxd --help`**) or **`AGENTS_HEADLESS_AUTO=on`** background read-only on **`post`** only — see [docs/board-automation.md](docs/board-automation.md).
+**Attach — use Cursor to implement, not Open Interpreter.** Default **`AGENTS_ATTACH=cursor`**: open the repo (and sandbox **POST.md**), work on a **branch/worktree**, commit, then **`agents done`** from your shell. **Do not use Open Interpreter for writing code** on board work: Interpreter's **execution sandbox** (not agentboard's **`.agents/sandbox-*`** folder) often blocks **`.git`**, paths outside the repo (**`~/work/journal`**), and similar — see [docs/board-automation.md](docs/board-automation.md) § Open Interpreter execution sandbox. Model and **`sandbox_mode`** are Open Interpreter config (**`/permissions`**, **`config.toml`**). Interpreter is fine for **read-only** recon or **`AGENTS_HEADLESS_AUTO=on`** on **`post`** only.
 | `AGENTS_SLACK_WEBHOOK_URL` | | optional Slack ping |
 | `AGENTS_OFFLINE_NUDGE` | on | thread **`reply`** when no headless CMD (`off` to disable) |
 | `AGENTS_WRAPPERS=off` | | `agents` skips the wrappers' settings (below) |

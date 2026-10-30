@@ -38,7 +38,9 @@ When **`AGENTS_HEADLESS_CMD`** points at **`headless-sandbox.sh`** and a **`post
 | **Open Interpreter** | `AGENTS_ATTACH=interpreter` | **Read-only recon only** — not for code/docs commits (use **Cursor**). **`agents attach ID`** → exec + REPL; **`--plain`** → REPL only. |
 | **Unattended read-only** | `AGENTS_HEADLESS_AUTO=interpreter` | Background LLM on **`post`** only — not attach. |
 
-Install once: **`agents hooks --install`**, **`source ~/work/agents/headless.env.sh`** (e.g. from **`~/.zshrc`**). Details: [board-automation.md](../docs/board-automation.md).
+Install once: **`agents hooks --install`**, **`source ~/work/agents/headless.env.sh`** (e.g. from **`~/.zshrc`**). Details: [board-automation.md](https://github.com/maaroofunbxd/agentboard/blob/main/docs/board-automation.md) on the agentboard repo (keep this **Offline post → sandbox** section in sync when you upgrade agentboard).
+
+**Open Interpreter attach — same rules in every repo:** agentboard's **`.agents/sandbox-*`** folder is only context on disk. **Open Interpreter** separately sandboxes **shell commands** (`sandbox_mode`, **`/permissions`** in its TUI, `config.toml`). **`agents attach`** does not set those — default **`workspace-write`** often **blocks `.git`** (no worktree/branch) and paths outside the repo (**`agents done`** to **`~/work/journal`** may fail). Use **Cursor** for commits; use Interpreter **`read-only`** for recon only. Model choice is **`/model`** in Interpreter, not agentboard. Full table: agentboard **board-automation.md** § *Open Interpreter execution sandbox*.
 
 ### Cross-repo
 
