@@ -15,12 +15,20 @@ uv tool install git+https://github.com/maaroofunbxd/agentboard   # or: pip insta
 
 Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.4.1`.
 
+**Portable workflow (no company CLI):** [docs/portable-setup.md](docs/portable-setup.md) — install, per-repo
+[`templates/`](templates/), and how this relates to optional [opsjournal](https://github.com/maaroofunbxd/opsjournal)
+and Unbxd `work` records ([docs/task-records.md](docs/task-records.md)).
+
+**Future coordination ideas** (Agent Mail / Beads trial, dropped 2026-10-14; not planned):
+[docs/agent-coordination-ideas.md](docs/agent-coordination-ideas.md).
+
 ## The commands
 
 ```bash
 agents whoami                         # this session's name (say it first), actor, repo, branch; the user's file for the repo
 agents status                         # what's for the repo you're in: posts, open claims, hand-offs, replies, worktrees
 agents status --all                   # every repo's
+agents status --history               # every stored event, including old and closed items
 agents status --this-session          # what this session still has open
 agents post --to api "document the port the service listens on"   # --to REPO (its folder name) or all
 agents post --to api-fd00 "your claim 664b1a overlaps mine"         # --to REPO-SESSION: one session of api (the start of its id will do)
@@ -38,6 +46,10 @@ agents setup                          # copy <agents dir>/global.md into each in
 ```
 
 `agents COMMAND --help` says more about each one.
+
+Text status keeps urgent posts and open work visible, shows up to five routine posts, and shortens long descriptions.
+Use `agents status --history` for the full event history in the selected repo scope (or every repo with `--all`).
+`--json` keeps complete text and the current structured view.
 
 ### Who is talking
 
