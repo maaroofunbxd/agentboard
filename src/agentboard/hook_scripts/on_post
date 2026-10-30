@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""on_post: when a post targets an offline repo, optionally run AGENTS_HEADLESS_CMD or nudge the thread.
+
+Install: agents hooks --install
+Disable hooks: AGENTS_HOOKS=off
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+
+
+def _env_flag(name: str, *, default_on: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default_on
+    return str(raw).strip().lower() not in ("off", "0", "no", "false")
+
+
+def _headless_cmd() -> str:
+    raw = os.environ.get("AGENTS_HEADLESS_CMD", "").strip()
+    if not raw or raw.lower() in ("false", "0", "no", "off"):
+        return ""
+    return raw
+
+
+def _offline_nudge(to: str, post_id: str, root: str) -> None:
+    from agentboard import board
+
+    msg = (
+        f"no live session on {to}: open that repo (root {root}), run `agents status`, "
+        f"handle post {post_id}, then `agents done {post_id}`. "
+        f"Asker: run `agents wait {post_id}` in the background if blocked."
+    )
+    board.post("reply", msg, ref=post_id, actor="board:offline-nudge", by="board")
+
+
+def _run_headless(headless: str, root: str, env: dict, post_id: str, to: str) -> int:
+    from agentboard import board, config
+
+    detach = _env_flag("AGENTS_HEADLESS_DETACH", default_on=True)
+    if not detach:
+        timeout = int(os.environ.get("AGENTS_HEADLESS_TIMEOUT", "600"))
+        proc = subprocess.run(
+            headless,
+            shell=True,
+            cwd=root,
+            env=env,
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            print(proc.stderr or proc.stdout or "AGENTS_HEADLESS_CMD failed", file=sys.stderr)
+            return 1
+        return 0
+
+    log_dir = config.settings.agents_dir() / "headless-log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log = log_dir / f"{post_id}.log"
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(f"--- headless start post={post_id} to={to}\n")
+    out = log.open("a", encoding="utf-8")
+    subprocess.Popen(  # noqa: S603
+        headless,
+        shell=True,
+        cwd=root,
+        env=env,
+        stdout=out,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    if _env_flag("AGENTS_HEADLESS_DETACH_REPLY", default_on=True):
+        board.post(
+            "reply",
+            f"headless started in background (log {log}) — will agents done {post_id} when finished",
+            ref=post_id,
+            actor="board:headless",
+            by="board",
+        )
+    return 0
+
+
+def main() -> int:
+    from agentboard.cli import load_wrappers
+
+    load_wrappers()
+    entry = json.load(sys.stdin)
+    if entry.get("kind") != "post":
+        return 0
+    to = entry.get("to")
+    if not to or to == "all":
+        return 0
+    text = (entry.get("text") or "").strip()
+    if text.lower().startswith("merged "):
+        return 0
+    if entry.get("to_session"):
+        return 0
+
+    from agentboard import board, worktrees
+
+    rows = board.agent_posts()
+    if board.presence(rows, to, entry.get("to_session"))["live"]:
+        return 0
+
+    roots = worktrees.repo_roots(rows)
+    root = roots.get(to)
+    if root is None:
+        return 0
+
+    post_id = entry.get("id")
+    if not post_id:
+        return 0
+
+    headless = _headless_cmd()
+    if headless:
+        env = {
+            **os.environ,
+            "AGENTS_PYTHON": sys.executable,
+            "AGENTS_HEADLESS_POST_ID": post_id,
+            "AGENTS_HEADLESS_TO": to,
+            "AGENTS_HEADLESS_TEXT": text[:8000],
+            "AGENTS_HEADLESS_ROOT": str(root),
+        }
+        return _run_headless(headless, str(root), env, post_id, to)
+
+    if _env_flag("AGENTS_OFFLINE_NUDGE", default_on=True):
+        _offline_nudge(to, post_id, str(root))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

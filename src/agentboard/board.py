@@ -27,6 +27,19 @@ POST_TTL = datetime.timedelta(days=14)  # a post nobody closed drops off the boa
 STALE_AFTER = datetime.timedelta(hours=24)
 
 
+def is_hook_bot(row: dict) -> bool:
+    """Hook-generated lines (not a human/agent session working in that repo)."""
+    if row.get("actor") in ("board:ack", "board:headless", "board:offline-nudge"):
+        return True
+    return row.get("kind") == "reply" and (row.get("text") or "").startswith("received (no live session")
+
+
+def session_has_real_listener(rows: list[dict], repo: str, session: str) -> bool:
+    """False when every line from this repo session is only hook bot traffic."""
+    lines = [r for r in rows if r.get("repo") == repo and r.get("session") == session]
+    return bool(lines) and any(not is_hook_bot(r) for r in lines)
+
+
 def board_dir() -> Optional[Path]:
     return config.settings.board_dir()
 
@@ -57,7 +70,11 @@ def _append(entry: dict) -> None:
     if where is None:
         return
     fields = config.settings.line_fields
-    where.append(AGENTS, {**(fields() if fields else who()), **entry})
+    line = {**(fields() if fields else who()), **entry}
+    where.append(AGENTS, line)
+    from agentboard import hooks
+
+    hooks.run(line.get("kind", ""), line)
 
 
 def read(stream: str = AGENTS) -> list[dict]:
@@ -157,6 +174,7 @@ def presence(rows: list[dict], repo: str, session: Optional[str] = None, skip: O
     day = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     ttl_ts = (now - POST_TTL).strftime("%Y-%m-%dT%H:%M:%SZ")
     mine = [e for e in sessions(rows, repo=repo, now=now, days=30) if not session or e["session"].startswith(session)]
+    mine = [e for e in mine if session_has_real_listener(rows, e["repo"], e["session"])]
     closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
     waiting = [r for r in rows if r.get("kind") == "post" and r.get("to") == repo and r.get("id") not in closed
                and r.get("id") != skip and r.get("ts", "") >= ttl_ts and (not session or r.get("to_session", "").startswith(session)

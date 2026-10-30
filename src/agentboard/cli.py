@@ -7,6 +7,7 @@ this machine, in every repo, shares it (agents.jsonl in the board folder, config
   agents whoami                                    # this session's name (say it first), actor, repo, branch
   agents status                                    # what's for the repo you're in: posts, open claims, hand-offs
   agents status --all                              # every repo's
+  agents status --history                          # every stored event, including old and closed items
   agents post --to api "document the port the service listens on in its README"
   agents post --to all "staging is pinned to a PR build until PROJ-123 is done"
   agents post --to api-fd00 "your claim 664b1a overlaps mine; which file is yours?"   # one session of api
@@ -24,7 +25,8 @@ After a session has read the board, `agents` itself and any program that calls b
 wrapper's own command) print one `[board]` line on stderr when something new arrives for its repo (a post, a claim
 or hand-off from its other sessions, a reply), and each urgent post in full. `agents post --urgent` is for what
 can't wait: it wakes `agents wait` even sent to all, and pops up a desktop notification to the user, who can reach
-a session that isn't listening. `agents wait`, run in the background, tells a session that runs no such command, in a tool that
+a session that isn't listening. On a TTY it asks before sending; without a TTY use `--yes` after the user OK'd it.
+`agents wait`, run in the background, tells a session that runs no such command, in a tool that
 wakes the agent when a background command ends.
 """
 from __future__ import annotations
@@ -39,6 +41,8 @@ from rich.console import Console
 from rich.table import Table
 
 from agentboard import board, config, identity, worktrees
+from agentboard import hooks as agent_hooks
+from agentboard import digest as board_digest
 from agentboard import tools as agent_tools
 from agentboard.store import FileStore
 
@@ -137,6 +141,23 @@ then ask me only for the blanks, all at once. When you keep missing something, a
 def _cmd() -> str:
     """How messages name this command: `agents`, or a wrapper's (config.Settings.command)."""
     return config.settings.command
+
+
+def _confirm_urgent(*, yes: bool, text: str, target: str) -> None:
+    """Before `agents post --urgent`: confirm on a TTY, or require --yes when stdin is not one."""
+    if yes:
+        return
+    preview = text if len(text) <= 200 else text[:197] + "..."
+    if sys.stdin.isatty():
+        typer.confirm(
+            f"Send URGENT post to {target}? (wakes `agents wait`, may notify the user)\n  {preview}",
+            abort=True,
+        )
+        return
+    raise typer.BadParameter(
+        f"`{_cmd()} post --urgent` needs a TTY to confirm, or pass --yes after the user OK'd it",
+        param_hint="--urgent",
+    )
 
 
 def print_json(data) -> None:
@@ -241,7 +262,10 @@ def cmd_post(
     ticket: Optional[str] = TicketOpt,
     urgent: bool = typer.Option(False, "--urgent", help="Something is broken or at risk, or the user said so: it wakes "
                                 "every waiting session it's for (even --to all), comes first in status and the [board] "
-                                "line, and pops up a desktop notification to the user. Rare, by convention."),
+                                "line, and pops up a desktop notification to the user. Rare, by convention. Confirms on "
+                                "a TTY; without one, pass --yes after the user OK'd it."),
+    yes: bool = typer.Option(False, "--yes", help="With --urgent: skip the TTY confirm (non-interactive runs only after "
+                          "the user said to send urgent)."),
 ) -> None:
     """Leave something for another repo's sessions, or for one session: a request or a heads-up. They see it when they start.
 
@@ -255,6 +279,9 @@ def cmd_post(
     A post to `all` wakes no `agents wait` unless it is --urgent: every session still sees it in status."""
     _need_board()
     repo, session = board.resolve_to(board.agent_posts(), to)
+    if urgent:
+        target = f"{repo}-{session}" if session else repo
+        _confirm_urgent(yes=yes, text=text, target=target)
     entry = _post("post", text, ticket, to=repo, to_session=session, urgent=urgent or None)
     if urgent:
         # an idle session can't be interrupted by anything on the board: its user can
@@ -380,15 +407,52 @@ def _print_plain(where: str, view: dict, sections) -> None:
     replies = f", {len(view['replies'])} reply(ies)" if view.get("replies") else ""
     print(f"Board {where}: {counts}{replies}" + (f"; {view['elsewhere']} post(s) for other repos (--all)" if view["elsewhere"] else ""))
     for _title, kind, rows in sections:
+        if kind == "post":
+            urgent = [r for r in rows if r.get("urgent")]
+            routine = [r for r in rows if not r.get("urgent")]
+            rows = urgent + routine[:5]
         for r in rows:
             to = f" to {addressee(r)}" if r.get("to") else ""
             stale = " (stale?)" if r.get("stale") else ""
-            print(f"[{'URGENT ' if r.get('urgent') else ''}{kind} {r['id']}] {r.get('ts', '')} from {sender(r)}{_live(r)}{to}{stale}{_this_session(r)}: {_what(r)}")
+            what = _compact(_what(r))
+            print(f"[{'URGENT ' if r.get('urgent') else ''}{kind} {r['id']}] {r.get('ts', '')} from {sender(r)}{_live(r)}{to}{stale}{_this_session(r)}: {what}")
+        if kind == "post" and len(routine) > 5:
+            print(f"  ... {len(routine) - 5} older post(s) hidden; use `{_cmd()} status --history`.")
     for tree in view.get("worktrees", []):
         print(f"[worktree] {tree}")
     if view.get("removable_worktrees"):
         print(f"{view['removable_worktrees']} worktree(s) can be removed: {_cmd()} worktrees --prune")
     print(f"Close one: {_cmd()} done ID 'what came of it'; take over a hand-off: {_cmd()} pickup ID")
+
+
+def _compact(text: str, limit: int = 160) -> str:
+    """Keep status rows to a readable width while leaving their full text in JSON and --history."""
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _print_history(rows: list[dict]) -> None:
+    """Print every stored board event, including old and closed items, in full."""
+    for r in sorted(rows, key=lambda item: (item.get("ts", ""), item.get("id", ""))):
+        kind = r.get("kind", "")
+        ref = r.get("ref")
+        label = f"{'URGENT ' if r.get('urgent') else ''}{kind} {r.get('id', '')}" if kind in ("post", "claim", "handoff") else f"{kind} {ref or r.get('id', '')}"
+        to = f" to {addressee(r)}" if r.get("to") else ""
+        text = r.get("text", "")
+        print(f"[{label}] {r.get('ts', '')} from {sender(r)}{to}: {text}")
+
+
+def _history_for(rows: list[dict], repo: Optional[str], session: Optional[str] = None) -> list[dict]:
+    """Board history relevant to the selected status scope, including every event on its threads."""
+    if session:
+        own = [r for r in rows if r.get("session") == session]
+        refs = {r.get("id") for r in own if r.get("kind") in ("post", "claim", "handoff")}
+        return [r for r in rows if r in own or (r.get("kind") in ("done", "reply") and r.get("ref") in refs)]
+    if repo is None:
+        return rows
+    heads = [r for r in rows if r.get("kind") in ("post", "claim", "handoff")
+             and (r.get("repo") == repo or (r.get("kind") == "post" and r.get("to") in (repo, "all")))]
+    refs = {r.get("id") for r in heads}
+    return [r for r in rows if r in heads or (r.get("kind") in ("done", "reply") and r.get("ref") in refs)]
 
 
 @agents_app.command("link")
@@ -674,12 +738,14 @@ def cmd_status(
     all_repos: bool = typer.Option(False, "--all", help="Posts for every repo, not only the one you're in."),
     this_session: bool = typer.Option(False, "--this-session", help="Only what this session posted and hasn't closed (any repo): "
                                       "what to close or hand off before it ends."),
+    history: bool = typer.Option(False, "--history", help="Show every stored board event, including old and closed items."),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    """What's on the board for the repo you're in: posts for it, open claims, open hand-offs.
+    """What's on the board for the repo you're in: recent posts, open claims, open hand-offs and recent replies.
 
-    Posts addressed to this repo or to `all`; agents read it when a session starts. A claim with no `done` for a
-    day is marked stale; a post nobody closed drops off after two weeks."""
+    Routine posts are limited to five in text output; long text is shortened there. Urgent posts and open work remain
+    visible. `--history` prints every stored event for the selected scope, including old and closed items. JSON stays
+    complete. Posts addressed to this repo or to `all`; agents read it when a session starts."""
     sid = identity.session_id()
     if this_session and not sid:
         raise typer.BadParameter(f"no session id: set {config.settings.env('SESSION')}=<name> on the commands (a tool in agentboard/tools.py gets one by itself)",
@@ -701,23 +767,40 @@ def cmd_status(
         print_json(view)
         return
     where = "of this session" if this_session else f"for {repo}" if repo else "every repo"
-    if not any(view.get(k) for k in ("posts", "claims", "handoffs", "replies")):
+    if not any(view.get(k) for k in ("posts", "claims", "handoffs", "replies")) and not history:
         console.print(f"[dim]Nothing on the board {where}." + (f" {view['elsewhere']} post(s) for other repos: --all." if view["elsewhere"] else "") + "[/dim]")
         return
     sections = _sections(where, view)
-    if not console.is_terminal:  # an agent's shell: one line each, full text, counts first (survives `| head`)
+    if history:
+        _print_plain(where, view, [])
+        print("Full board history:")
+        _print_history(_history_for(board.agent_posts(), repo, sid if this_session else None))
+        for tree in view.get("worktrees", []):
+            print(f"[worktree] {tree}")
+        if view.get("removable_worktrees"):
+            print(f"{view['removable_worktrees']} worktree(s) can be removed: {_cmd()} worktrees --prune")
+        return
+    if not console.is_terminal:  # an agent's shell: one line each, counts first (survives `| head`)
         _print_plain(where, view, sections)
         return
     for title, _kind, rows in sections:
         if not rows:
             continue
+        hidden = 0
+        if _kind == "post":
+            urgent = [r for r in rows if r.get("urgent")]
+            routine = [r for r in rows if not r.get("urgent")]
+            hidden = max(0, len(routine) - 5)
+            rows = urgent + routine[:5]
         table = Table(title=title, title_justify="left", show_lines=False)
         for col in ("id", "when (UTC)", "from", "to", "what"):
             table.add_column(col, overflow="fold")
         for r in rows:
             stale = " [yellow](stale?)[/yellow]" if r.get("stale") else ""
-            table.add_row(("[bold red]URGENT[/bold red] " if r.get("urgent") else "") + r["id"], r.get("ts", ""), sender(r) + _live(r) + _this_session(r), addressee(r), _what(r) + stale)
+            table.add_row(("[bold red]URGENT[/bold red] " if r.get("urgent") else "") + r["id"], r.get("ts", ""), sender(r) + _live(r) + _this_session(r), addressee(r), _compact(_what(r)) + stale)
         console.print(table)
+        if hidden:
+            console.print(f"[dim]... {hidden} older post(s) hidden; use `{_cmd()} status --history`.[/dim]")
     if view.get("worktrees"):
         console.print("[dim]Worktrees: " + "; ".join(view["worktrees"]) + "[/dim]", highlight=False)
     if view.get("removable_worktrees"):
@@ -847,6 +930,152 @@ def _warn_other_boards() -> None:
               f"`{_cmd()} where --merge {folder}` copies its lines here, `--archive {folder}` sets it aside.", file=sys.stderr)
 
 
+@agents_app.command("digest")
+def cmd_digest(
+    pending: bool = typer.Option(
+        False,
+        "--pending",
+        help="Append posts that arrived for offline repos since the last digest to ~/.agents/pending/<repo>.jsonl.",
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """List open board posts for repos with no live session (offline inbox). For cron/launchd; does not notify by default.
+
+    With --pending, record new lines for the next session in that repo (read the file or agents status)."""
+    _need_board()
+    out = board_digest.run(record_pending=pending)
+    if json_output:
+        print_json(out)
+        return
+    offline = out.get("offline") or {}
+    if not offline:
+        console.print("[dim]No open posts to offline repos.[/dim]")
+        return
+    for repo, posts in offline.items():
+        console.print(f"[bold]{repo}[/bold] ({len(posts)} post(s), no live session)")
+        for p in posts:
+            console.print(f"  {p['id']}  {p.get('ts', '')}  from {p.get('from', '?')}: {p.get('text', '')[:120]}")
+
+
+@agents_app.command("attach")
+def cmd_attach(
+    post_id: str = typer.Argument(..., help="Post id from the sandbox reply on the thread."),
+    exec_only: bool = typer.Option(
+        False,
+        "--exec-only",
+        help="Interpreter only: run exec with context and exit (no REPL).",
+    ),
+    plain: bool = typer.Option(
+        False,
+        "--plain",
+        help="Do not inject post context — Cursor: repo only; Interpreter: REPL only (POST.md path shown).",
+    ),
+) -> None:
+    """Attach to a sandbox post. Default injects context; `--plain` is the same idea for Cursor and Interpreter.
+
+    `AGENTS_ATTACH=cursor|interpreter` picks the tool. Cursor never starts Agent CLI automatically."""
+    _need_board()
+    import os
+    import subprocess
+
+    from agentboard import plugins, sandbox
+
+    try:
+        meta = sandbox.load(post_id)
+    except FileNotFoundError:
+        raise typer.BadParameter(
+            f"no sandbox for {post_id!r}; meta missing in {sandbox.sessions_dir()}/",
+            param_hint="POST_ID",
+        ) from None
+    try:
+        mode = plugins.attach_mode()
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    if plugins.headless_auto_on() and mode == "interpreter":
+        console.print(
+            "[yellow]Note:[/yellow] AGENTS_HEADLESS_AUTO=on may already be working this post in the background."
+        )
+
+    root = Path(meta.get("root", "")).expanduser()
+    post_md = Path(meta.get("post_md", root / ".agents" / f"sandbox-{post_id}" / "POST.md")).expanduser()
+    if not root.is_dir():
+        raise typer.BadParameter(f"repo root missing: {root}")
+
+    post_text = post_md.read_text(encoding="utf-8") if post_md.is_file() else ""
+    prompt = sandbox.build_attach_prompt(post_id, root, post_text)
+    inject = not plain
+
+    if exec_only and (mode != "interpreter" or plain):
+        raise typer.BadParameter("--exec-only needs AGENTS_ATTACH=interpreter and no --plain")
+
+    sandbox.note_attach(post_id, mode, exec_once=mode == "interpreter" and inject and not exec_only)
+
+    if mode == "cursor":
+        console.print(f"[bold]Post[/bold] {post_id}  [bold]repo[/bold] {meta.get('to', '?')}  → Cursor")
+        try:
+            root_argv = plugins.cursor_open_argv(str(root))
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        subprocess.Popen(root_argv, start_new_session=True)  # noqa: S603
+        if inject and post_md.is_file():
+            try:
+                subprocess.Popen(plugins.cursor_open_argv(str(post_md)), start_new_session=True)  # noqa: S603
+            except ValueError:
+                pass
+            console.print(f"[green]Opened[/green] {root} + POST.md in Cursor")
+        else:
+            console.print(f"[green]Opened[/green] {root}  [dim](--plain: read {post_md})[/dim]")
+        console.print("[dim]Start chat yourself — attach does not run Cursor Agent.[/dim]")
+        console.print(f"[dim]Close on board:[/dim] agents done {post_id} \"…\"")
+        return
+
+    env = {**os.environ, "AGENTS_SANDBOX_POST_ID": post_id}
+    if inject:
+        console.print(f"[green]Interpreter[/green] in {root} — post {post_id} (exec context, then REPL)")
+        argv = plugins.interpreter_exec_argv(prompt)
+        subprocess.run(argv, cwd=str(root), env=env, check=False)  # noqa: S603
+        if exec_only:
+            console.print(f"[dim]Close on board:[/dim] agents done {post_id} \"…\"")
+            return
+        console.print("[dim]Continuing in interactive Interpreter.[/dim]")
+    else:
+        console.print(f"[green]Interpreter[/green] in {root} — post {post_id} (--plain)")
+        console.print(f"[dim]Context on disk:[/dim] {post_md}")
+        if post_text.strip():
+            console.print("[bold]POST:[/bold]")
+            console.print(post_text.strip())
+
+    console.print(f"[dim]When finished:[/dim] agents done {post_id} \"summary\"")
+    subprocess.run(["interpreter"], cwd=str(root), env=env, check=False)  # noqa: S603
+
+
+@agents_app.command("hooks")
+def cmd_hooks(
+    install: bool = typer.Option(False, "--install", help="Copy bundled hook scripts into ~/.agents/hooks/ (on_post auto-ack)."),
+    force: bool = typer.Option(False, "--force", help="With --install: overwrite existing hook scripts."),
+) -> None:
+    """Optional ~/.agents/hooks/on_KIND scripts run after each board write (AGENTS_HOOKS=off to disable).
+
+    Bundled **`headless-run.sh`**: set **`AGENTS_HEADLESS_CMD`** to run when a post targets an offline repo."""
+    folder = agent_hooks.hooks_dir()
+    if install:
+        installed = agent_hooks.install_examples(force=force)
+        if not installed:
+            console.print(f"[dim]Nothing installed (hooks in {folder}; use --force to replace).[/dim]")
+            return
+        for path in installed:
+            console.print(f"[green]Installed[/green] {path}")
+        console.print("Set AGENTS_HEADLESS_CMD to ~/.agents/hooks/headless-sandbox.sh (see headless.env.sh). AGENTS_HOOKS=off to disable.")
+        return
+    console.print(f"Hooks folder: {folder}")
+    if folder.is_dir():
+        for p in sorted(folder.iterdir()):
+            if p.is_file():
+                console.print(f"  {p.name}")
+    else:
+        console.print("[dim]  (none yet — run `agents hooks --install`)[/dim]")
+
+
 @agents_app.command("where")
 def cmd_where(
     save: bool = typer.Option(False, "--save", help="Write this copy's locations to the config file, for every other copy of agents."),
@@ -974,6 +1203,9 @@ def load_wrappers() -> None:
     skipped with a warning."""
     import os
 
+    from agentboard import plugins
+
+    plugins.load_headless_env_defaults()
     if os.environ.get("AGENTS_WRAPPERS", "").strip().lower() in ("off", "0", "no"):
         return
     from importlib import metadata

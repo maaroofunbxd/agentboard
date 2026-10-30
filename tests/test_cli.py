@@ -1,5 +1,6 @@
 """`agents`: the board's commands, with agentboard's own settings (no wrapper)."""
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -700,6 +701,31 @@ def test_one_board_for_every_copy_config_file_where_and_merge(jdir, monkeypatch,
         config.write_config({"board_dir": 'a"b'})
 
 
+def test_urgent_post_requires_yes_without_tty(jdir, monkeypatch):
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    bad = run("agents", "post", "disk full", "--to", "tools", "--urgent")
+    assert bad.exit_code != 0 and "TTY" in bad.output and "--yes" in bad.output
+    assert json.loads(run("agents", "status", "--json").output)["posts"] == []
+
+
+def test_urgent_post_confirm_on_tty(jdir, monkeypatch):
+    import typer
+    from agentboard.cli import _confirm_urgent
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("agentboard.cli.typer.confirm", lambda *a, **k: True)
+    _confirm_urgent(yes=False, text="disk full", target="tools")
+
+    def abort(*_a, **_k):
+        raise typer.Abort()
+
+    monkeypatch.setattr("agentboard.cli.typer.confirm", abort)
+    with pytest.raises(typer.Abort):
+        _confirm_urgent(yes=False, text="nope", target="tools")
+
+
 def test_a_post_to_all_wakes_no_wait_unless_urgent(jdir, monkeypatch):
     from agentboard import board as j
     from agentboard import identity
@@ -710,10 +736,10 @@ def test_a_post_to_all_wakes_no_wait_unless_urgent(jdir, monkeypatch):
     run("agents", "post", "heads-up: new release", "--to", "all")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
     assert run("agents", "wait", "--timeout", "0.05", "--every", "0.01").exit_code == 124
-    assert "heads-up: new release" in run("agents", "status").output  # still on the board
+    assert "heads-up" in run("agents", "status").output  # still on the board (Rich may wrap the line)
     j.mark_seen("aaaa", "2020-01-01T00:00:00Z")  # status marked it seen, to the second
     monkeypatch.setenv("AGENTS_SESSION", "bbbb")
-    posted = run("agents", "post", "prod search is down, stop deploys", "--to", "all", "--urgent")
+    posted = run("agents", "post", "prod search is down, stop deploys", "--to", "all", "--urgent", "--yes")
     assert posted.exit_code == 0 and "No desktop notification" in posted.output  # AGENTS_NOTIFY=off
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
     out = run("agents", "wait", "--timeout", "1", "--every", "0.01").output

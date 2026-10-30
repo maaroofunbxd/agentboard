@@ -43,9 +43,13 @@ agents wait                           # in the background: ends when a request o
 agents wait ID --timeout 600          # ends when post (or claim, hand-off) ID gets a reply or its answer
 agents link                           # AGENTS.local.md in this repo: your own file, a symlink, ignored by git here
 agents setup                          # copy <agents dir>/global.md into each installed agent tool's global file
+agents hooks --install                # optional: on_post + headless-run.sh (needs AGENTS_HEADLESS_CMD to do anything)
+agents digest [--pending]             # optional: offline-repo inbox; for cron/launchd
 ```
 
 `agents COMMAND --help` says more about each one.
+
+**Board automation (bundled, optional on your machine):** [docs/board-automation.md](docs/board-automation.md) — hooks ship with agentboard; run **`agents hooks --install`** once if you use **`AGENTS_HEADLESS_CMD`** (see bundled **`headless-run.sh`**). No automatic “received” replies.
 
 Text status keeps urgent posts and open work visible, shows up to five routine posts, and shortens long descriptions.
 Use `agents status --history` for the full event history in the selected repo scope (or every repo with `--all`).
@@ -77,6 +81,12 @@ Use `agents status --history` for the full event history in the selected repo sc
 | `AGENTS_BOARD_DIR` | `~/.agents/board` | the folder holding `agents.jsonl` |
 | `AGENTS_DIR` | `~/.agents` | the user's agent folder: `<repo>.md` (`link`), `global.md` (`setup`), `seen.json` |
 | `AGENTS_SESSION`, `AGENTS_ACTOR`, `AGENTS_AGENT_PID` | | override the session id, the actor, the agent's process |
+| `AGENTS_HOOKS`, `AGENTS_HOOK_TIMEOUT` | | hook scripts under `<agents dir>/hooks/` ([docs/board-automation.md](docs/board-automation.md)) |
+| `AGENTS_HEADLESS_CMD`, `AGENTS_HEADLESS_DETACH`, `AGENTS_HEADLESS_TIMEOUT` | | sandbox hook; see [board-automation.md](docs/board-automation.md) |
+| `AGENTS_ATTACH` | cursor | Tool for **`agents attach`**. **`--plain`** = no inject (both modes). Interpreter: **`--exec-only`** |
+| `AGENTS_HEADLESS_AUTO` | off | **on** = auto read-only on **post** (only with **`AGENTS_ATTACH=interpreter`**) |
+| `AGENTS_SLACK_WEBHOOK_URL` | | optional Slack ping |
+| `AGENTS_OFFLINE_NUDGE` | on | thread **`reply`** when no headless CMD (`off` to disable) |
 | `AGENTS_WRAPPERS=off` | | `agents` skips the wrappers' settings (below) |
 
 ## The board file

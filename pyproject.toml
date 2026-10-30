@@ -26,6 +26,9 @@ version = { attr = "agentboard.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+agentboard = ["hook_scripts/*"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py39"
