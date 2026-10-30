@@ -35,7 +35,7 @@ When **`AGENTS_HEADLESS_CMD`** points at **`headless-sandbox.sh`** and a **`post
 | You use | Set in `~/work/agents/headless.env.sh` | What to do |
 |---------|----------------------------------------|--------------|
 | **Cursor** (default) | `AGENTS_ATTACH=cursor`, `AGENTS_HEADLESS_AUTO=off` | **`agents attach ID`** → repo + **POST.md** in Cursor; **`--plain`** → repo only. Start chat yourself; **`agents done ID`**. |
-| **Open Interpreter** | `AGENTS_ATTACH=interpreter` | **`agents attach ID`** → exec + REPL; **`--plain`** → REPL only (same “no inject” as Cursor **`--plain`**). |
+| **Open Interpreter** | `AGENTS_ATTACH=interpreter` | **Read-only recon only** — not for code/docs commits (use **Cursor**). **`agents attach ID`** → exec + REPL; **`--plain`** → REPL only. |
 | **Unattended read-only** | `AGENTS_HEADLESS_AUTO=interpreter` | Background LLM on **`post`** only — not attach. |
 
 Install once: **`agents hooks --install`**, **`source ~/work/agents/headless.env.sh`** (e.g. from **`~/.zshrc`**). Details: [board-automation.md](../docs/board-automation.md).
