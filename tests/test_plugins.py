@@ -1,7 +1,5 @@
 import os
 
-import pytest
-
 from agentboard import config, plugins
 
 

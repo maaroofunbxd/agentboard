@@ -335,7 +335,7 @@ def nudge(argv: list[str]) -> None:
     nudge), and each urgent post in full before it. Not after `agents status` or `agents wait`: they show the board
     themselves. A session that never read the board gets nothing here: reading it at the start is the rule. Never raises."""
     session = identity.session_id()
-    if not session or (argv[:1] == ["agents"] and argv[1:2] in (["status"], ["wait"])):
+    if not session or (argv[:1] == ["agents"] and argv[1:2] in (["status"], ["wait"], ["whoami"])):
         return
     try:
         since = _seen().get(session)

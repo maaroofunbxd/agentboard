@@ -41,8 +41,8 @@ from rich.console import Console
 from rich.table import Table
 
 from agentboard import board, config, identity, worktrees
-from agentboard import hooks as agent_hooks
 from agentboard import digest as board_digest
+from agentboard import hooks as agent_hooks
 from agentboard import tools as agent_tools
 from agentboard.store import FileStore
 
@@ -191,7 +191,8 @@ def local_file(repo: Optional[str]) -> tuple[Optional[str], Optional[str]]:
 
 @agents_app.command("whoami")
 def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
-    """This session's name (say it at the start): `<repo>-<id>`; then the user's own file for this repo, if any.
+    """This session's name (say it at the start): `<repo>-<id>`; then the user's own file for this repo, if any, and
+    the board status for this repo.
 
     The id is $AGENTS_SESSION ($<prefix>_SESSION under a wrapper, config.py) when set (any tool can set it for its
     commands), else the session id its tool exports (tools.py), else `p<the agent's process>`. The file
@@ -221,6 +222,8 @@ def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
         print(text.rstrip())
     if not info["name"]:
         raise typer.Exit(1)
+    print()
+    _show_status(repo=repo, all_repos=False, this_session=False, history=False, json_output=False, warn=False)
 
 
 @agents_app.command("claim")
@@ -751,7 +754,13 @@ def cmd_status(
         raise typer.BadParameter(f"no session id: set {config.settings.env('SESSION')}=<name> on the commands (a tool in agentboard/tools.py gets one by itself)",
                                  param_hint="--this-session")
     repo = None if all_repos or this_session else identity.here()
-    _warn_other_boards()
+    _show_status(repo=repo, all_repos=all_repos, this_session=this_session, history=history, json_output=json_output, warn=True)
+
+
+def _show_status(*, repo: Optional[str], all_repos: bool, this_session: bool, history: bool, json_output: bool, warn: bool) -> None:
+    sid = identity.session_id()
+    if warn:
+        _warn_other_boards()
     view = board.agents_view(board.agent_posts(), repo=repo)
     if this_session:
         for key in ("posts", "claims", "handoffs", "replies"):

@@ -1,6 +1,4 @@
-from pathlib import Path
-
-from agentboard.sandbox import build_attach_prompt, file_excerpt, paths_mentioned_in_text, path_context_block
+from agentboard.sandbox import build_attach_prompt, file_excerpt, path_context_block, paths_mentioned_in_text
 
 
 def test_paths_from_backticks_and_tokens():

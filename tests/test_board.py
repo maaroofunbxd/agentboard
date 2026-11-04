@@ -65,9 +65,9 @@ def test_session_id_and_name(jdir, monkeypatch):
     monkeypatch.setattr(identity, "_session", [])
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
     monkeypatch.delenv("CLAUDE_PID")
-    monkeypatch.setenv("AGENTS_ACTOR", "agent:codex")
+    monkeypatch.delenv("AGENTS_ACTOR")
     monkeypatch.setattr(identity, "agent_pid", lambda: 81234)
-    assert identity.session_id() == "p81234"  # any other agent tool: its process
+    assert identity.session_id() == "p81234"  # any generic agent tool (even without AGENTS_ACTOR): its process
     monkeypatch.setattr(identity, "_session", [])
     monkeypatch.setenv("AGENTS_SESSION", "codex 7/a")
     assert identity.session_id() == "codex-7-a"  # any tool can name its session

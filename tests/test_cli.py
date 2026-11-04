@@ -101,12 +101,13 @@ def test_agents_whoami_and_the_name_on_posts(jdir, monkeypatch):
     assert run("agents", "whoami").exit_code == 1  # no session id (no tool id, no agent process found)
     monkeypatch.setenv("AGENTS_SESSION", "734b")
     result = run("agents", "whoami")
-    assert result.exit_code == 0 and result.output.startswith("tools-734b")
+    assert result.exit_code == 0 and result.output.startswith("tools-734b") and "Nothing on the board for tools." in result.output
     assert json.loads(run("agents", "whoami", "--json").output)["name"] == "tools-734b"
     posted = run("agents", "post", "x", "--to", "all")
     assert "from tools-734b" in posted.output
     [p] = json.loads(run("agents", "status", "--json").output)["posts"]
     assert p["session"] == "734b"
+    assert "[post " in run("agents", "whoami").output
 
 
 def test_agents_status_outside_a_terminal_is_one_line_each_with_counts_first(jdir, monkeypatch):
@@ -119,7 +120,8 @@ def test_agents_status_outside_a_terminal_is_one_line_each_with_counts_first(jdi
     run("agents", "handoff", "done: a; left: b")
     out = run("agents", "status").output.splitlines()
     assert out[0] == "Board for work: 1 post(s), 1 open claim(s), 1 open hand-off(s)"
-    assert out[1].startswith("[post ") and out[1].endswith(long) and " to work" in out[1]
+    assert out[1].startswith("[post ") and out[1].endswith("…") and " to work" in out[1]
+    assert long in run("agents", "status", "--history").output
     assert out[2].startswith("[claim ") and out[3].startswith("[handoff ")
 
 
@@ -712,6 +714,7 @@ def test_urgent_post_requires_yes_without_tty(jdir, monkeypatch):
 
 def test_urgent_post_confirm_on_tty(jdir, monkeypatch):
     import typer
+
     from agentboard.cli import _confirm_urgent
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
