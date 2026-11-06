@@ -382,7 +382,7 @@ def _kind(r: dict) -> str:
 def _what(r: dict) -> str:
     """A row's text for status: a claim's paths, a reply's answer."""
     if "reply" in r:
-        return f"{r.get('text', '')}  -> {sender(r['replied'])}: {r['reply']}"
+        return f"{_compact(r.get('text', ''), 60)}  -> {sender(r['replied'])}: {r['reply']}"
     paths = f" [paths: {', '.join(r['paths'])}]" if r.get("paths") else ""
     return r.get("text", "") + paths
 
@@ -733,7 +733,10 @@ def _wait_thread(ref: str, timeout: float, every: float) -> None:
         print(f"The thread is closed. Tell the user the answer; a follow-up still works: {_cmd()} reply {ref} \"...\".")
     else:
         print(f"Answer with: {_cmd()} reply {ref} \"...\", then {_cmd()} wait {ref} again (in the background).")
-    board.mark_seen(me, new[-1].get("ts"))
+    since = board._seen().get(me) if me else None
+    repo = identity.here()
+    if since and repo and not [r for r in board.board_news(board.agent_posts(), repo, me, since) if r.get("ref") != ref and r.get("id") != ref]:
+        board.mark_seen(me, max(since, new[-1].get("ts") or ""))
 
 
 @agents_app.command("status")

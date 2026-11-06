@@ -797,3 +797,35 @@ def test_agents_worktrees_prune_only_merged_clean_unheld(jdir, tmp_path, monkeyp
     assert "would remove" in out and (tmp_path / "api-done-br").is_dir()
     run("agents", "worktrees", "--no-gh", "--prune", "--yes")
     assert not (tmp_path / "api-done-br").exists() and (tmp_path / "api-held-br").is_dir()
+
+
+def test_multiple_posts_from_same_session_preserve_other_nudges_and_show_replies_on_long_posts(jdir, monkeypatch, capsys):
+    from agentboard import board as j
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
+    p1 = j.post("post", "first long question: " + "x" * 200, to="api")
+    p2 = j.post("post", "second long question: " + "y" * 200, to="api")
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", "bbbb")
+    j.post("done", "answer for second", ref=p2["id"])
+    j.post("done", "answer for first", ref=p1["id"])
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    waited = run("agents", "wait", p1["id"], "--timeout", "1", "--every", "0.01")
+    assert waited.exit_code == 0 and "answer for first" in waited.output
+
+    # Waiting on p1 must not swallow the unseen reply on p2
+    capsys.readouterr()
+    j.nudge(["k8s", "find", "x"])
+    assert "[board] new for tools" in capsys.readouterr().err
+
+    # Status shows the reply text even when the original post exceeds 160 chars
+    status_out = run("agents", "status").output
+    assert "answer for first" in status_out and "answer for second" in status_out
+    assert "-> api-bbbb" in status_out
+
