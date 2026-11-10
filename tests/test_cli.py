@@ -24,7 +24,7 @@ def jdir(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTS_DIR", str(tmp_path / "agents"))
     monkeypatch.setenv("AGENTS_CONFIG", str(tmp_path / "config.toml"))  # never the user's own
     monkeypatch.setattr(config, "fallback_board", lambda: tmp_path / "fallback")
-    for var, _ in agent_tools.detect_env():
+    for var in agent_tools.every_env():
         monkeypatch.delenv(var, raising=False)
     for var in ("AGENTS_SESSION", "AGENTS_AGENT_PID", "GITHUB_ACTIONS", "GITHUB_ACTOR"):
         monkeypatch.delenv(var, raising=False)

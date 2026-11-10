@@ -14,7 +14,7 @@ import sys
 
 from agentboard import config
 
-ATTACH_MODES = ("cursor", "interpreter")
+ATTACH_MODES = ("cursor", "antigravity", "interpreter")
 _ON = frozenset({"on", "1", "true", "yes", "interpreter"})  # interpreter = legacy alias for on
 _OFF = frozenset({"off", "0", "no", "false", ""})
 
@@ -57,11 +57,13 @@ def _legacy_attach() -> str | None:
 
 
 def attach_mode() -> str:
-    """cursor: open -a Cursor (no agent starts). interpreter: interactive Open Interpreter in repo."""
+    """cursor/antigravity: open IDE (no agent starts). interpreter: interactive Open Interpreter in repo."""
     load_headless_env_defaults()
     raw = os.environ.get("AGENTS_ATTACH", "").strip().lower() or _legacy_attach() or "cursor"
     if raw in ("macos-cursor", "open"):
         raw = "cursor"
+    elif raw == "agy":
+        raw = "antigravity"
     if raw not in ATTACH_MODES:
         raise ValueError(f"AGENTS_ATTACH={raw!r} unknown (use: {', '.join(ATTACH_MODES)})")
     if raw == "interpreter" and not shutil.which("interpreter"):
@@ -115,6 +117,17 @@ def cursor_open_argv(root: str) -> list[str]:
     if sys.platform != "darwin":
         raise ValueError("AGENTS_ATTACH=cursor needs macOS or set AGENTS_ATTACH_OPEN_CMD")
     return ["open", "-a", "Cursor", root]
+
+
+def antigravity_open_argv(root: str) -> list[str]:
+    custom = os.environ.get("AGENTS_ATTACH_OPEN_CMD", "").strip()
+    if custom:
+        return [*custom.split(), root]
+    if shutil.which("agy"):
+        return ["agy", root]
+    if sys.platform != "darwin":
+        raise ValueError("AGENTS_ATTACH=antigravity needs agy on PATH, macOS, or set AGENTS_ATTACH_OPEN_CMD")
+    return ["open", "-a", "Antigravity", root]
 
 
 def interpreter_exec_argv(prompt: str) -> list[str]:

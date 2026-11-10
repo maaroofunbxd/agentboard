@@ -1025,22 +1025,24 @@ def cmd_attach(
 
     sandbox.note_attach(post_id, mode, exec_once=mode == "interpreter" and inject and not exec_only)
 
-    if mode == "cursor":
-        console.print(f"[bold]Post[/bold] {post_id}  [bold]repo[/bold] {meta.get('to', '?')}  → Cursor")
+    if mode in ("cursor", "antigravity"):
+        label = "Antigravity" if mode == "antigravity" else "Cursor"
+        open_fn = plugins.antigravity_open_argv if mode == "antigravity" else plugins.cursor_open_argv
+        console.print(f"[bold]Post[/bold] {post_id}  [bold]repo[/bold] {meta.get('to', '?')}  → {label}")
         try:
-            root_argv = plugins.cursor_open_argv(str(root))
+            root_argv = open_fn(str(root))
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         subprocess.Popen(root_argv, start_new_session=True)  # noqa: S603
         if inject and post_md.is_file():
             try:
-                subprocess.Popen(plugins.cursor_open_argv(str(post_md)), start_new_session=True)  # noqa: S603
+                subprocess.Popen(open_fn(str(post_md)), start_new_session=True)  # noqa: S603
             except ValueError:
                 pass
-            console.print(f"[green]Opened[/green] {root} + POST.md in Cursor")
+            console.print(f"[green]Opened[/green] {root} + POST.md in {label}")
         else:
             console.print(f"[green]Opened[/green] {root}  [dim](--plain: read {post_md})[/dim]")
-        console.print("[dim]Start chat yourself — attach does not run Cursor Agent.[/dim]")
+        console.print(f"[dim]Start chat yourself — attach does not run {label} Agent automatically.[/dim]")
         console.print(f"[dim]Close on board:[/dim] agents done {post_id} \"…\"")
         return
 

@@ -59,3 +59,10 @@ def test_interpreter_exec_argv():
     argv = plugins.interpreter_exec_argv("hello")
     assert argv[-1] == "hello"
     assert "exec" in argv
+
+
+def test_attach_mode_antigravity(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTS_DIR", str(tmp_path))
+    monkeypatch.setenv("AGENTS_ATTACH", "agy")
+    assert plugins.attach_mode() == "antigravity"
+

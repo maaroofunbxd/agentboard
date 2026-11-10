@@ -44,6 +44,8 @@ TOOLS = (
     Tool("codex", ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"), command="codex"),
     Tool("gemini-cli", ("GEMINI_CLI",), command="gemini"),
     Tool("cursor", ("CURSOR_AGENT",), command="cursor-agent"),
+    Tool("antigravity", ("ANTIGRAVITY_AGENT",), session_env="ANTIGRAVITY_CONVERSATION_ID", command="agy",
+         address="~/.gemini/antigravity/brain/{session}/.system_generated/logs/transcript.jsonl"),
 )
 
 

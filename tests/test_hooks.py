@@ -12,7 +12,7 @@ def jdir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "settings", config.Settings())
     monkeypatch.setenv("AGENTS_BOARD_DIR", str(tmp_path / "board"))
     monkeypatch.setenv("AGENTS_DIR", str(tmp_path / "agents"))
-    for var, _ in agent_tools.detect_env():
+    for var in agent_tools.every_env():
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("AGENTS_NOTIFY", "off")
     return tmp_path / "board"

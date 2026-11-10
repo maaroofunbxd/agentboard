@@ -13,7 +13,7 @@ It is not a record of changes, only coordination.
 uv tool install git+https://github.com/maaroofunbxd/agentboard   # or: pip install git+https://...
 ```
 
-Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.5`.
+Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.6`.
 
 **Portable workflow (no company CLI):** [docs/portable-setup.md](docs/portable-setup.md) — install, per-repo
 [`templates/`](templates/), and how this relates to optional [opsjournal](https://github.com/maaroofunbxd/opsjournal)

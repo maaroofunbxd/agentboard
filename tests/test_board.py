@@ -13,7 +13,7 @@ def jdir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "settings", config.Settings())
     monkeypatch.setenv("AGENTS_BOARD_DIR", str(tmp_path / "board"))
     monkeypatch.setenv("AGENTS_DIR", str(tmp_path / "agents"))
-    for var, _ in agent_tools.detect_env():
+    for var in agent_tools.every_env():
         monkeypatch.delenv(var, raising=False)
     for var in ("AGENTS_ACTOR", "AGENTS_SESSION", "AGENTS_AGENT_PID", "GITHUB_ACTIONS", "GITHUB_ACTOR"):
         monkeypatch.delenv(var, raising=False)
@@ -71,6 +71,14 @@ def test_session_id_and_name(jdir, monkeypatch):
     monkeypatch.setattr(identity, "_session", [])
     monkeypatch.setenv("AGENTS_SESSION", "codex 7/a")
     assert identity.session_id() == "codex-7-a"  # any tool can name its session
+    monkeypatch.delenv("AGENTS_SESSION")
+    monkeypatch.setattr(identity, "_session", [])
+    monkeypatch.setenv("ANTIGRAVITY_AGENT", "1")
+    monkeypatch.setenv("ANTIGRAVITY_CONVERSATION_ID", "436441b3-5518-474d-8c62-7398812368af")
+    monkeypatch.setattr(identity, "agent_pid", lambda: 2179)
+    assert identity.actor() == "agent:antigravity"
+    assert identity.session_id() == "4364.2179"
+    assert identity.tool_session() == "436441b3-5518-474d-8c62-7398812368af"
 
 
 def test_a_wrapper_names_the_variables(jdir, monkeypatch):
