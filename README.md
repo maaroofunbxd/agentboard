@@ -13,7 +13,7 @@ It is not a record of changes, only coordination.
 uv tool install git+https://github.com/maaroofunbxd/agentboard   # or: pip install git+https://...
 ```
 
-Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.4`.
+Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.5`.
 
 **Portable workflow (no company CLI):** [docs/portable-setup.md](docs/portable-setup.md) — install, per-repo
 [`templates/`](templates/), and how this relates to optional [opsjournal](https://github.com/maaroofunbxd/opsjournal)
@@ -49,7 +49,7 @@ agents digest [--pending]             # optional: offline-repo inbox; for cron/l
 
 `agents COMMAND --help` says more about each one.
 
-**Board automation (bundled, optional on your machine):** [docs/board-automation.md](docs/board-automation.md) — hooks ship with agentboard; run **`agents hooks --install`** once if you use **`AGENTS_HEADLESS_CMD`** (see bundled **`headless-run.sh`**). No automatic “received” replies.
+**Board automation (experimental, off by default):** [docs/board-automation.md](docs/board-automation.md) — optional `on_post` hooks, `agents digest`, and experimental/untested Cursor & Open Interpreter sandbox/attach prototypes.
 
 Text status keeps urgent posts and open work visible, shows up to five routine posts, and shortens long descriptions.
 Use `agents status --history` for the full event history in the selected repo scope (or every repo with `--all`).
@@ -82,13 +82,8 @@ Use `agents status --history` for the full event history in the selected repo sc
 | `AGENTS_DIR` | `~/.agents` | the user's agent folder: `<repo>.md` (`link`), `global.md` (`setup`), `seen.json` |
 | `AGENTS_SESSION`, `AGENTS_ACTOR`, `AGENTS_AGENT_PID` | | override the session id, the actor, the agent's process |
 | `AGENTS_HOOKS`, `AGENTS_HOOK_TIMEOUT` | | hook scripts under `<agents dir>/hooks/` ([docs/board-automation.md](docs/board-automation.md)) |
-| `AGENTS_HEADLESS_CMD`, `AGENTS_HEADLESS_DETACH`, `AGENTS_HEADLESS_TIMEOUT` | | sandbox hook; see [board-automation.md](docs/board-automation.md) |
-| `AGENTS_ATTACH` | cursor | Tool for **`agents attach`**. **`--plain`** = no inject (both modes). Interpreter: **`--exec-only`** |
-| `AGENTS_HEADLESS_AUTO` | off | **on** = auto read-only on **post** (only with **`AGENTS_ATTACH=interpreter`**) |
-
-**Attach — use Cursor to implement, not Open Interpreter.** Default **`AGENTS_ATTACH=cursor`**: open the repo (and sandbox **POST.md**), work on a **branch/worktree**, commit, then **`agents done`** from your shell. **Do not use Open Interpreter for writing code** on board work: Interpreter's **execution sandbox** (not agentboard's **`.agents/sandbox-*`** folder) often blocks **`.git`**, paths outside the repo (**`~/work/journal`**), and similar — see [docs/board-automation.md](docs/board-automation.md) § Open Interpreter execution sandbox. Model and **`sandbox_mode`** are Open Interpreter config (**`/permissions`**, **`config.toml`**). Interpreter is fine for **read-only** recon or **`AGENTS_HEADLESS_AUTO=on`** on **`post`** only.
-| `AGENTS_SLACK_WEBHOOK_URL` | | optional Slack ping |
-| `AGENTS_OFFLINE_NUDGE` | on | thread **`reply`** when no headless CMD (`off` to disable) |
+| `AGENTS_OFFLINE_NUDGE` | on | thread **`reply`** when `on_post` hook is installed and no headless CMD is set (`off` to disable) |
+| `AGENTS_HEADLESS_CMD`, `AGENTS_ATTACH`, `AGENTS_HEADLESS_AUTO` | | experimental/untested sandbox & Cursor/Interpreter attach prototypes; see [docs/board-automation.md](docs/board-automation.md) |
 | `AGENTS_WRAPPERS=off` | | `agents` skips the wrappers' settings (below) |
 
 ## The board file

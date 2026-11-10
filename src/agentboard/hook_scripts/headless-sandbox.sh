@@ -9,7 +9,7 @@ ROOT="${AGENTS_HEADLESS_ROOT:?}"
 TO="${AGENTS_HEADLESS_TO:-unknown}"
 TEXT="${AGENTS_HEADLESS_TEXT:-}"
 
-AGENTS_DIR="${AGENTS_DIR:-$HOME/work/agents}"
+AGENTS_DIR="${AGENTS_DIR:-$HOME/.agents}"
 META_DIR="${AGENTS_DIR}/headless-sessions"
 LOG_DIR="${AGENTS_DIR}/headless-log"
 SANDBOX="$ROOT/.agents/sandbox-${POST_ID}"

@@ -829,3 +829,50 @@ def test_multiple_posts_from_same_session_preserve_other_nudges_and_show_replies
     assert "answer for first" in status_out and "answer for second" in status_out
     assert "-> api-bbbb" in status_out
 
+
+def test_wait_thread_ignores_hook_bot_replies_until_real_reply_or_done(jdir, monkeypatch):
+    from agentboard import board as j
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    p = j.post("post", "question for offline repo", to="api")
+
+    # Hook bot reply (e.g. headless-sandbox.sh or offline-nudge) must not prematurely wake `agents wait ID`
+    j.post("reply", "sandbox (api): /tmp/sandbox", ref=p["id"], actor="board:headless", session="headless", by="board")
+    timed_out = run("agents", "wait", p["id"], "--timeout", "0.02", "--every", "0.01")
+    assert timed_out.exit_code == 124
+
+    # A `done` (including from headless-read.sh) or real reply wakes `agents wait ID`
+    j.post("done", "read-only answer", ref=p["id"], actor="board:headless", session="headless", by="board")
+    woke = run("agents", "wait", p["id"], "--timeout", "1", "--every", "0.01")
+    assert woke.exit_code == 0 and "read-only answer" in woke.output
+
+
+def test_load_wrappers_runs_entry_points_before_headless_env_defaults(jdir, monkeypatch, tmp_path):
+    import os
+
+    from agentboard import cli, config
+
+    wrapper_agents = tmp_path / "wrapped_agents"
+    wrapper_agents.mkdir()
+    (wrapper_agents / "headless.env.sh").write_text("export AGENTS_ATTACH=interpreter\n", encoding="utf-8")
+
+    class FakeEP:
+        name = "test_wrap"
+        value = "test_wrap:init"
+
+        def load(self):
+            config.configure(agents_dir=lambda: wrapper_agents)
+
+    class FakeEPs:
+        def select(self, group):
+            return [FakeEP()] if group == cli.SETTINGS_GROUP else []
+
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda: FakeEPs())
+    monkeypatch.delenv("AGENTS_ATTACH", raising=False)
+    monkeypatch.delenv("AGENTS_DIR", raising=False)
+    cli.load_wrappers()
+    assert os.environ.get("AGENTS_ATTACH") == "interpreter"
+
+

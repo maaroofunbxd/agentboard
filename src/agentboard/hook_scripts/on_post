@@ -61,19 +61,19 @@ def _run_headless(headless: str, root: str, env: dict, post_id: str, to: str) ->
     log_dir = config.settings.agents_dir() / "headless-log"
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / f"{post_id}.log"
-    with log.open("a", encoding="utf-8") as fh:
-        fh.write(f"--- headless start post={post_id} to={to}\n")
-    out = log.open("a", encoding="utf-8")
-    subprocess.Popen(  # noqa: S603
-        headless,
-        shell=True,
-        cwd=root,
-        env=env,
-        stdout=out,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    if _env_flag("AGENTS_HEADLESS_DETACH_REPLY", default_on=True):
+    with log.open("a", encoding="utf-8") as out:
+        out.write(f"--- headless start post={post_id} to={to}\n")
+        out.flush()
+        subprocess.Popen(  # noqa: S603
+            headless,
+            shell=True,
+            cwd=root,
+            env=env,
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    if _env_flag("AGENTS_HEADLESS_DETACH_REPLY", default_on=False):
         board.post(
             "reply",
             f"headless started in background (log {log}) — will agents done {post_id} when finished",
@@ -100,7 +100,7 @@ def main() -> int:
     if entry.get("to_session"):
         return 0
 
-    from agentboard import board, worktrees
+    from agentboard import board, config, worktrees
 
     rows = board.agent_posts()
     if board.presence(rows, to, entry.get("to_session"))["live"]:
@@ -119,6 +119,7 @@ def main() -> int:
     if headless:
         env = {
             **os.environ,
+            "AGENTS_DIR": str(config.settings.agents_dir()),
             "AGENTS_PYTHON": sys.executable,
             "AGENTS_HEADLESS_POST_ID": post_id,
             "AGENTS_HEADLESS_TO": to,

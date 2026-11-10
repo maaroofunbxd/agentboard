@@ -61,15 +61,16 @@ HOOK_PY="${AGENTS_PYTHON:-python3}"
     fi
   done
 } >"$CTX"
-$HOOK_PY -c "
+$HOOK_PY - "$CTX" <<'PY' 2>/dev/null >>"$CTX" || true
+import os, sys
 from pathlib import Path
 from agentboard.sandbox import path_context_block
-root = Path('${AGENTS_HEADLESS_ROOT}').expanduser()
-text = Path('$CTX').read_text(encoding='utf-8')
+root = Path(os.environ["AGENTS_HEADLESS_ROOT"]).expanduser()
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
 block = path_context_block(root, text)
 if block:
     print(block)
-" 2>/dev/null >>"$CTX" || true
+PY
 
 LLM_USED=0
 AUTO="$($HOOK_PY -c "
@@ -83,7 +84,13 @@ Then a short answer for agents done (plain text, no markdown fences).
 
 Context:
 $(cat "$CTX")"
-  RAW="$(interpreter exec -- "$PROMPT" 2>/dev/null || true)"
+  export PROMPT
+  RAW="$($HOOK_PY -c "
+import os, subprocess
+from agentboard.plugins import interpreter_exec_argv
+proc = subprocess.run(interpreter_exec_argv(os.environ['PROMPT']), capture_output=True, text=True, check=False)
+print(proc.stdout or '', end='')
+" 2>/dev/null || true)"
   ANSWER="$(printf '%s\n' "$RAW" | sed -n 's/^ANSWER:[[:space:]]*//p' | tail -1)"
   if [ -z "$ANSWER" ]; then
     ANSWER="read-only (LLM): $(printf '%s\n' "$RAW" | tail -3 | tr '\n' ' ' | cut -c1-400)"

@@ -720,7 +720,10 @@ def _wait_thread(ref: str, timeout: float, every: float) -> None:
         mtime = board.board_mtime()
         if mtime != seen_mtime:
             seen_mtime = mtime
-            new = [r for r in board.thread(board.agent_posts(), ref)[after:] if not (me and r.get("session") == me)]
+            new = [
+                r for r in board.thread(board.agent_posts(), ref)[after:]
+                if not (me and r.get("session") == me) and not (r.get("kind") == "reply" and board.is_hook_bot(r))
+            ]
             if new:
                 break
         if timeout and time.monotonic() - start >= timeout:
@@ -1217,18 +1220,20 @@ def load_wrappers() -> None:
 
     from agentboard import plugins
 
-    plugins.load_headless_env_defaults()
-    if os.environ.get("AGENTS_WRAPPERS", "").strip().lower() in ("off", "0", "no"):
-        return
-    from importlib import metadata
+    try:
+        if os.environ.get("AGENTS_WRAPPERS", "").strip().lower() in ("off", "0", "no"):
+            return
+        from importlib import metadata
 
-    eps = metadata.entry_points()
-    group = eps.select(group=SETTINGS_GROUP) if hasattr(eps, "select") else eps.get(SETTINGS_GROUP, [])
-    for ep in group:
-        try:
-            ep.load()
-        except Exception as exc:  # noqa: BLE001 - a broken wrapper must not stop the board
-            print(f"WARNING: agentboard wrapper {ep.name} ({ep.value}) didn't load: {exc}", file=sys.stderr)
+        eps = metadata.entry_points()
+        group = eps.select(group=SETTINGS_GROUP) if hasattr(eps, "select") else eps.get(SETTINGS_GROUP, [])
+        for ep in group:
+            try:
+                ep.load()
+            except Exception as exc:  # noqa: BLE001 - a broken wrapper must not stop the board
+                print(f"WARNING: agentboard wrapper {ep.name} ({ep.value}) didn't load: {exc}", file=sys.stderr)
+    finally:
+        plugins.load_headless_env_defaults()
 
 
 def main() -> None:

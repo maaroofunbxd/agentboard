@@ -28,25 +28,14 @@ Coordination between sessions on this machine: [agentboard](https://github.com/m
 
 Posts nobody closes drop off the default **`agents status`** view after **14 days** but stay in the log — close them when done so the inbox stays usable.
 
-### Offline post → sandbox (optional hooks)
+### Offline post → sandbox (experimental / untested)
 
-When **`AGENTS_HEADLESS_CMD`** points at **`headless-sandbox.sh`** and a **`post`** hits a repo with **no live session**, the hook writes **`.agents/sandbox-<post-id>/`** ( **`POST.md`**, status snapshot, repo docs) and replies with **`agents attach <id>`**.
-
-| You use | Set in `~/work/agents/headless.env.sh` | What to do |
-|---------|----------------------------------------|--------------|
-| **Cursor** (default) | `AGENTS_ATTACH=cursor`, `AGENTS_HEADLESS_AUTO=off` | **`agents attach ID`** → repo + **POST.md** in Cursor; **`--plain`** → repo only. Start chat yourself; **`agents done ID`**. |
-| **Open Interpreter** | `AGENTS_ATTACH=interpreter` | **Read-only recon only** — not for code/docs commits (use **Cursor**). **`agents attach ID`** → exec + REPL; **`--plain`** → REPL only. |
-| **Unattended read-only** | `AGENTS_HEADLESS_AUTO=interpreter` | Background LLM on **`post`** only — not attach. |
-
-Install once: **`agents hooks --install`**, **`source ~/work/agents/headless.env.sh`** (e.g. from **`~/.zshrc`**). Details: [board-automation.md](https://github.com/maaroofunbxd/agentboard/blob/main/docs/board-automation.md) on the agentboard repo (keep this **Offline post → sandbox** section in sync when you upgrade agentboard).
-
-**Open Interpreter attach — same rules in every repo:** agentboard's **`.agents/sandbox-*`** folder is only context on disk. **Open Interpreter** separately sandboxes **shell commands** (`sandbox_mode`, **`/permissions`** in its TUI, `config.toml`). **`agents attach`** does not set those — default **`workspace-write`** often **blocks `.git`** (no worktree/branch) and paths outside the repo (**`agents done`** to **`~/work/journal`** may fail). Use **Cursor** for commits; use Interpreter **`read-only`** for recon only. Model choice is **`/model`** in Interpreter, not agentboard. Full table: agentboard **board-automation.md** § *Open Interpreter execution sandbox*.
+The offline sandbox hooks (`AGENTS_HEADLESS_CMD`, `headless-sandbox.sh`, and `agents attach` for Cursor / Open Interpreter) are experimental prototypes and not required for normal board work. If you are experimenting with them, see [board-automation.md](https://github.com/maaroofunbxd/agentboard/blob/main/docs/board-automation.md).
 
 ### Cross-repo
 
 - **Asker:** `post` → post id → **`wait ID` in background** if blocked; never substitute prose ("watch with agents wait") for running **`wait`**.
-- **Responder (live session):** `status` → act → **`done ID`**.
-- **Responder (offline sandbox reply):** **`agents attach <id>`** (Cursor or Interpreter per **`headless.env.sh`**) or open repo + **`.agents/sandbox-<id>/POST.md`** → work → **`done ID`**.
+- **Responder:** `status` → act → **`done ID`**.
 
 ### Incoming posts (don't stall)
 

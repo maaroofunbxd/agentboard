@@ -1,5 +1,7 @@
 # Board automation (app-neutral)
 
+> **Status (experimental / untested):** The headless sandbox (`headless-sandbox.sh`), `agents attach` (`cursor` and `interpreter` modes), and unattended Open Interpreter (`AGENTS_HEADLESS_AUTO`, `headless-read.sh`, `headless-llm.sh`) are **experimental prototypes that are untested / do not work reliably end-to-end**. They are kept in-tree for reference only. Use Tier 1 board coordination (`agents post`, `agents wait`, `agents status`, `agents done`) for real work.
+
 Optional **`~/.agents/hooks/on_post`** runs when a **`post`** targets a repo with **no live session**:
 
 1. **`AGENTS_HEADLESS_CMD`** set → run that shell (e.g. **`headless-run.sh`** using only **`agents status` / `agents reply`**, or **`headless-llm.sh`** via Open Interpreter calling **`agents done`**).
@@ -30,15 +32,17 @@ agents hooks             # list hooks folder
 | `AGENTS_HOOK_TIMEOUT` | Seconds (default 120) |
 | `AGENTS_HEADLESS_CMD` | Shell when **target offline** (unset / empty / `false` = off; then offline nudge applies if hooks on) |
 | `AGENTS_HEADLESS_TIMEOUT` | Seconds when **detach off** (sync run; default 600) |
-| `AGENTS_HEADLESS_DETACH` | **on** (default): run headless CMD in background; log `~/work/agents/headless-log/<id>.log` |
-| `AGENTS_HEADLESS_DETACH_REPLY` | **on** (default): thread **reply** when detached headless starts |
+| `AGENTS_HEADLESS_DETACH` | **on** (default): run headless CMD in background; log `<agents dir>/headless-log/<id>.log` |
+| `AGENTS_HEADLESS_DETACH_REPLY` | **off** (default): extra thread **reply** when detached headless starts (`on` to enable) |
 | `AGENTS_OFFLINE_NUDGE` | `off` skips the default thread reply when headless is off (default **on** after `hooks --install`) |
 
-### Bundled `headless-run.sh` (legacy)
+### Bundled `headless-run.sh` (legacy / experimental)
 
 Writes **`.agents/headless-*`** + a thread **reply**. Most teams can skip this: the next session runs **`agents status`** and reads **AGENTS.md** anyway. Use only if you want file breadcrumbs without an LLM.
 
-### Sandbox — `headless-sandbox.sh` (recommended)
+### Sandbox & `agents attach` — `headless-sandbox.sh` (experimental / untested)
+
+> **Note:** The Cursor and Open Interpreter attach/headless paths below are **untested prototypes and do not work reliably in practice** (kept as reference notes only).
 
 On an offline-repo **`post`**: **`<repo>/.agents/sandbox-<id>/`**, **`~/work/agents/headless-sessions/<id>.json`**, thread **`reply`** with **`agents attach <id>`**.
 
