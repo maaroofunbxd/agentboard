@@ -348,31 +348,6 @@ def board_mtime() -> float:
     return where.changed(AGENTS) if where else 0.0
 
 
-def nudge(argv: list[str]) -> None:
-    """After an agent session's run of the program (`agents` itself, or a wrapper's command that calls this): one line
-    on stderr if the board got something for its repo since the session last looked (`agents status`, or the last
-    nudge), and each urgent post in full before it. Not after `agents status` or `agents wait`: they show the board
-    themselves. A session that never read the board gets nothing here: reading it at the start is the rule. Never raises."""
-    session = identity.session_id()
-    if not session or (argv[:1] == ["agents"] and argv[1:2] in (["status"], ["wait"], ["whoami"])):
-        return
-    try:
-        since = _seen().get(session)
-        repo = identity.here() if since else None
-        if not repo:
-            return
-        news = board_asks(agent_posts(), repo, session, since)
-        if not news:
-            return
-        from collections import Counter
-
-        counts = Counter("reply" if r.get("kind") in ("done", "reply") else r.get("kind") for r in news)
-        kinds = ", ".join(f"{n} {k}" for k, n in sorted(counts.items()))
-        for r in news:
-            if r.get("urgent"):
-                print(f"[board] URGENT post {r.get('id')} from {r.get('repo') or ''}-{r.get('session') or ''}: {r.get('text', '')}. "
-                      f"Tell the user now. Close it: {config.settings.command} done {r.get('id')} \"...\"", file=sys.stderr)
-        print(f"[board] new for {repo} since {since}: {kinds}. Read it: {config.settings.command} status", file=sys.stderr)
-        mark_seen(session, news[-1].get("ts"))
-    except Exception:  # noqa: BLE001 - a nudge must never break the command it follows
-        return
+def nudge(argv: list[str] | None = None) -> None:
+    """No-op stub kept for backwards compatibility with callers that import `agentboard.board.nudge` (e.g. opsjournal)."""
+    return

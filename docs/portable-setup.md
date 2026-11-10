@@ -6,7 +6,7 @@ Use this when you want **agent coordination** on any machine, without `unbxd` or
 
 ```bash
 uv tool install git+https://github.com/maaroofunbxd/agentboard
-# or: pip install "agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.10"
+# or: pip install "agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.11"
 ```
 
 Defaults: board at `~/.agents/board/agents.jsonl`, per-user files under `~/.agents/`. Override with `AGENTS_BOARD_DIR` and `AGENTS_DIR` (see the main README).
@@ -34,7 +34,7 @@ Point `next:` at something concrete: read `HANDOFF.md`, run tests, or open a tic
 
 ## With Unbxd `unbxd` (optional)
 
-[unbxdtools](https://github.com/unbxd/unbxdtools) depends on agentboard and loads **`agentboard.settings`** so standalone `agents` and `unbxd` share one board. That wrapper adds `agents open` (waits beside a work record), Jira-aware `work start`, and a `[board]` line after `unbxd` runs. None of that is required for agentboard alone.
+[unbxdtools](https://github.com/unbxd/unbxdtools) depends on agentboard and loads **`agentboard.settings`** so standalone `agents` and `unbxd` share one board. That wrapper adds `agents open` (waits beside a work record) and Jira-aware `work start`. None of that is required for agentboard alone.
 
 ## opsjournal (optional, separate)
 

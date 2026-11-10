@@ -179,30 +179,19 @@ def test_a_reply_to_a_post_shows_in_the_senders_repo(jdir, monkeypatch):
     assert "-> api-bbbb (" in run("agents", "status").output
 
 
-def test_nudge_tells_a_session_once_about_what_is_new_for_its_repo(jdir, monkeypatch, capsys):
+def test_nudge_is_noop(jdir, monkeypatch, capsys):
     from agentboard import board as j
     from agentboard import identity
 
     monkeypatch.setattr(identity, "here", lambda: "tools")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
-    j.nudge(["k8s", "find", "x"])
-    assert capsys.readouterr().err == ""  # never read the board: nothing (AGENTS.md says read it first)
     j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
-    j.post("post", "for api only", to="api")
-    j.post("claim", "my own claim")
-    j.nudge(["k8s", "find", "x"])
-    assert capsys.readouterr().err == ""  # not for this repo, or this session's own
     monkeypatch.setenv("AGENTS_SESSION", "bbbb")
     j.post("post", "merged agents-nudge: merge main", to="tools")
     j.post("handoff", "done: a; left: b")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
-    j.nudge(["agents", "status"])
-    assert capsys.readouterr().err == ""  # the board command itself shows it
     j.nudge(["k8s", "find", "x"])
-    err = capsys.readouterr().err
-    assert err.startswith("[board] new for tools since 2020-01-01T00:00:00Z: 1 handoff, 1 post.") and "agents status" in err
-    j.nudge(["k8s", "find", "x"])
-    assert capsys.readouterr().err == ""  # told once
+    assert capsys.readouterr().err == ""
 
 
 def _repo(tmp_path, name):
@@ -314,7 +303,7 @@ def test_agents_status_this_session_and_its_marker(jdir, monkeypatch):
     assert run("agents", "status", "--this-session").exit_code != 0  # no session id: says how to get one
 
 
-def test_agents_status_this_session_leaves_the_nudge(jdir, monkeypatch, capsys):
+def test_agents_status_this_session_leaves_wait_unseen(jdir, monkeypatch):
     from agentboard import board as j
     from agentboard import identity
 
@@ -325,12 +314,9 @@ def test_agents_status_this_session_leaves_the_nudge(jdir, monkeypatch, capsys):
     j.post("post", "please add --memory", to="tools")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
     assert "--memory" not in run("agents", "status", "--this-session").output
-    capsys.readouterr()
-    j.nudge(["k8s", "find", "x"])
-    assert capsys.readouterr().err.startswith("[board] new for tools")  # the request it didn't show still nudges
+    assert j._seen().get("aaaa") == "2020-01-01T00:00:00Z"  # --this-session does not advance seen timestamp
     run("agents", "status")
-    j.nudge(["k8s", "find", "x"])
-    assert capsys.readouterr().err == ""  # the full board marks it read
+    assert j._seen().get("aaaa", "") > "2020-01-01T00:00:00Z"
 
 
 def test_agents_wait_wakes_for_a_request_not_for_a_claim(jdir, monkeypatch):
@@ -754,7 +740,7 @@ def test_a_post_to_all_wakes_no_wait_unless_urgent(jdir, monkeypatch):
     assert "URGENT: tell the user now" in out and "[URGENT post " in out and "stop deploys" in out
 
 
-def test_urgent_posts_come_first_and_in_full_in_the_nudge(jdir, monkeypatch, capsys):
+def test_urgent_posts_come_first_in_status(jdir, monkeypatch):
     from agentboard import board as j
     from agentboard import identity
 
@@ -766,10 +752,6 @@ def test_urgent_posts_come_first_and_in_full_in_the_nudge(jdir, monkeypatch, cap
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
     plain = run("agents", "status").output.splitlines()
     assert plain[1].startswith("[URGENT post ") and "a normal ask" in plain[2]
-    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
-    j.nudge(["agents", "claim", "x"])  # agents' own commands nudge too, but not status or wait
-    err = capsys.readouterr().err
-    assert err.startswith("[board] URGENT post ") and "disk full on the board host" in err and "2 post" in err
 
 
 def test_notify_is_off_by_variable(jdir, monkeypatch):
@@ -825,9 +807,7 @@ def test_multiple_posts_from_same_session_preserve_other_nudges_and_show_replies
     assert waited.exit_code == 0 and "answer for first" in waited.output
 
     # Waiting on p1 must not swallow the unseen reply on p2
-    capsys.readouterr()
-    j.nudge(["k8s", "find", "x"])
-    assert "[board] new for tools" in capsys.readouterr().err
+    assert j._seen().get("aaaa") == "2020-01-01T00:00:00Z"
 
     # Status shows the reply text even when the original post exceeds 160 chars
     status_out = run("agents", "status").output

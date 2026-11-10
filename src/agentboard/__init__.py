@@ -4,9 +4,9 @@
 - identity.py: the actor, the session id and name, the repo you're in
 - tools.py: the agent tools recognised by name, the only place that names them
 - store.py: where the lines are kept: the plain file (FileStore), or another Store given to configure()
-- board.py: post, read, the views status uses, the [board] nudge
+- board.py: post, read, the views status and wait use
 - waits.py: open items (what a piece of work waits on) and their checks; a wrapper gives it its commands
 - cli.py: the typer app and the `agents` console script (a wrapper can mount the app as a subcommand)
 """
 
-__version__ = "0.5.10"
+__version__ = "0.5.11"

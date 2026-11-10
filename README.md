@@ -13,7 +13,7 @@ It is not a record of changes, only coordination.
 uv tool install git+https://github.com/maaroofunbxd/agentboard   # or: pip install git+https://...
 ```
 
-Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.10`.
+Python 3.9 or newer. As a dependency: `agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.11`.
 
 **Portable workflow (no company CLI):** [docs/portable-setup.md](docs/portable-setup.md) — install, per-repo
 [`templates/`](templates/), and how this relates to optional [opsjournal](https://github.com/maaroofunbxd/opsjournal)
@@ -127,8 +127,7 @@ import, before any other call:
 - `global_template`: what `global.md` starts from
 - `store`: another place to keep the lines (below)
 
-The wrapper then mounts `agentboard.cli.agents_app` as a typer subcommand. It can also call `board.nudge(argv)` after
-each of its own runs, which prints a `[board]` line when something new arrived for the repo.
+The wrapper then mounts `agentboard.cli.agents_app` as a typer subcommand.
 
 For `agents` to show the same board as the wrapper, the wrapper names its configuring module as an entry point:
 

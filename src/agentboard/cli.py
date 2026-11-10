@@ -21,13 +21,10 @@ this machine, in every repo, shares it (agents.jsonl in the board folder, config
   agents wait                                      # in the background: ends when a request or reply arrives
   agents wait 3fa9c1 --timeout 600                 # ends when post 3fa9c1 gets a reply or its answer
 
-After a session has read the board, `agents` itself and any program that calls board.nudge after each run (a
-wrapper's own command) print one `[board]` line on stderr when something new arrives for its repo (a post, a claim
-or hand-off from its other sessions, a reply), and each urgent post in full. `agents post --urgent` is for what
-can't wait: it wakes `agents wait` even sent to all, and pops up a desktop notification to the user, who can reach
-a session that isn't listening. On a TTY it asks before sending; without a TTY use `--yes` after the user OK'd it.
-`agents wait`, run in the background, tells a session that runs no such command, in a tool that
-wakes the agent when a background command ends.
+`agents post --urgent` is for what can't wait: it wakes `agents wait` even sent to all, and pops up a desktop
+notification to the user, who can reach a session that isn't listening. On a TTY it asks before sending; without a TTY
+use `--yes` after the user OK'd it. `agents wait`, run in the background, wakes the agent when a request or reply
+arrives for its repo or thread.
 """
 from __future__ import annotations
 
@@ -1288,7 +1285,4 @@ def main() -> None:
     """`agents`: the board with this module's settings (config.py: the defaults, or what a wrapper configured)."""
     load_wrappers()
     save_wrapper_locations()
-    try:
-        agents_app(prog_name="agents")
-    finally:  # the [board] line (board.nudge): what's new for this repo, after any command but status and wait
-        board.nudge(["agents", *sys.argv[1:]])
+    agents_app(prog_name="agents")
