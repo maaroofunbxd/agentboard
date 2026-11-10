@@ -63,6 +63,13 @@ def test_interpreter_exec_argv():
 
 def test_attach_mode_antigravity(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTS_DIR", str(tmp_path))
-    monkeypatch.setenv("AGENTS_ATTACH", "agy")
+    monkeypatch.setenv("AGENTS_ATTACH", "antigravity")
     assert plugins.attach_mode() == "antigravity"
+    monkeypatch.setenv("AGENTS_ATTACH", "agy")
+    monkeypatch.setitem(plugins.shutil.__dict__, "which", lambda _: "/usr/bin/agy")
+    assert plugins.attach_mode() == "agy"
+    monkeypatch.setenv("AGENTS_HEADLESS_AUTO", "on")
+    assert plugins.headless_auto_on() is True
+    assert plugins.headless_exec_argv("hi") == ["agy", "-p", "hi"]
+
 

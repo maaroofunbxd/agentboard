@@ -1006,7 +1006,7 @@ def cmd_attach(
         mode = plugins.attach_mode()
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    if plugins.headless_auto_on() and mode == "interpreter":
+    if plugins.headless_auto_on() and mode in ("interpreter", "antigravity", "agy"):
         console.print(
             "[yellow]Note:[/yellow] AGENTS_HEADLESS_AUTO=on may already be working this post in the background."
         )
@@ -1020,10 +1020,10 @@ def cmd_attach(
     prompt = sandbox.build_attach_prompt(post_id, root, post_text)
     inject = not plain
 
-    if exec_only and (mode != "interpreter" or plain):
-        raise typer.BadParameter("--exec-only needs AGENTS_ATTACH=interpreter and no --plain")
+    if exec_only and (mode not in ("interpreter", "agy") or plain):
+        raise typer.BadParameter("--exec-only needs AGENTS_ATTACH=agy|interpreter and no --plain")
 
-    sandbox.note_attach(post_id, mode, exec_once=mode == "interpreter" and inject and not exec_only)
+    sandbox.note_attach(post_id, mode, exec_once=mode in ("interpreter", "agy") and inject and not exec_only)
 
     if mode in ("cursor", "antigravity"):
         label = "Antigravity" if mode == "antigravity" else "Cursor"
@@ -1047,6 +1047,22 @@ def cmd_attach(
         return
 
     env = {**os.environ, "AGENTS_SANDBOX_POST_ID": post_id}
+    if mode == "agy":
+        if exec_only:
+            console.print(f"[green]agy[/green] in {root} — post {post_id} (-p non-interactive)")
+            subprocess.run(plugins.agy_exec_argv(prompt), cwd=str(root), env=env, check=False)  # noqa: S603
+            console.print(f"[dim]Close on board:[/dim] agents done {post_id} \"…\"")
+            return
+        if inject:
+            console.print(f"[green]agy[/green] in {root} — post {post_id} (-i interactive with prompt)")
+            console.print(f"[dim]When finished:[/dim] agents done {post_id} \"summary\"")
+            subprocess.run(["agy", "-i", prompt], cwd=str(root), env=env, check=False)  # noqa: S603
+            return
+        console.print(f"[green]agy[/green] in {root} — post {post_id} (--plain)")
+        console.print(f"[dim]Context on disk:[/dim] {post_md}")
+        console.print(f"[dim]When finished:[/dim] agents done {post_id} \"summary\"")
+        subprocess.run(["agy"], cwd=str(root), env=env, check=False)  # noqa: S603
+        return
     if inject:
         console.print(f"[green]Interpreter[/green] in {root} — post {post_id} (exec context, then REPL)")
         argv = plugins.interpreter_exec_argv(prompt)

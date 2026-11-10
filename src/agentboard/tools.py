@@ -1,4 +1,4 @@
-"""The agent tools recognised by name (Claude Code, Codex, Gemini CLI, Cursor), and the only place that names them.
+"""The agent tools recognised by name (Claude Code, Codex, Gemini CLI, Cursor, Antigravity), and the only place that names them.
 
 Nothing on the board needs any of them. With none, a person at a terminal, or any agent tool that sets
 <PREFIX>_ACTOR=agent:<name> and <PREFIX>_SESSION=<id> on its commands (config.Settings.env_prefix: AGENTS_, or a wrapper's),
@@ -44,8 +44,10 @@ TOOLS = (
     Tool("codex", ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED"), command="codex"),
     Tool("gemini-cli", ("GEMINI_CLI",), command="gemini"),
     Tool("cursor", ("CURSOR_AGENT",), command="cursor-agent"),
-    Tool("antigravity", ("ANTIGRAVITY_AGENT",), session_env="ANTIGRAVITY_CONVERSATION_ID", command="agy",
-         address="~/.gemini/antigravity/brain/{session}/.system_generated/logs/transcript.jsonl"),
+    Tool("antigravity", ("ANTIGRAVITY_AGENT",), session_env="ANTIGRAVITY_CONVERSATION_ID", command="agy -i",
+         global_file="~/.gemini/config/GEMINI.md",
+         address="~/.gemini/antigravity/brain/{session}/.system_generated/logs/transcript.jsonl",
+         resume="agy --conversation {session}"),
 )
 
 

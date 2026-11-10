@@ -87,8 +87,8 @@ $(cat "$CTX")"
   export PROMPT
   RAW="$($HOOK_PY -c "
 import os, subprocess
-from agentboard.plugins import interpreter_exec_argv
-proc = subprocess.run(interpreter_exec_argv(os.environ['PROMPT']), capture_output=True, text=True, check=False)
+from agentboard.plugins import headless_exec_argv
+proc = subprocess.run(headless_exec_argv(os.environ['PROMPT']), capture_output=True, text=True, check=False)
 print(proc.stdout or '', end='')
 " 2>/dev/null || true)"
   ANSWER="$(printf '%s\n' "$RAW" | sed -n 's/^ANSWER:[[:space:]]*//p' | tail -1)"

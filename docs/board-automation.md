@@ -49,9 +49,11 @@ On an offline-repo **`post`**: **`<repo>/.agents/sandbox-<id>/`**, **`~/work/age
 | Piece | What it does |
 |-------|----------------|
 | **Sandbox files** | Always (when **`AGENTS_HEADLESS_CMD`** is set) |
+| **`AGENTS_ATTACH=antigravity`** | **`agents attach ID`** opens repo **and** sandbox **POST.md** in Antigravity IDE; **`--plain`** opens repo only |
+| **`AGENTS_ATTACH=agy`** | **`agents attach ID`** = **`agy -i`** (interactive CLI with context); **`--plain`** = **`agy`** REPL; **`--exec-only`** = **`agy -p`** and exit |
 | **`AGENTS_ATTACH=cursor`** (default) | **`agents attach ID`** opens repo **and** sandbox **POST.md** in Cursor; **`--plain`** opens repo only |
 | **`AGENTS_ATTACH=interpreter`** | **`agents attach ID`** = exec context + REPL; **`--plain`** = REPL only (POST printed); **`--exec-only`** = exec and exit |
-| **`AGENTS_HEADLESS_AUTO=interpreter`** | On **`post` only**: background **`headless-read.sh`** (read-only LLM, then hook **`agents done`**) — not Cursor |
+| **`AGENTS_HEADLESS_AUTO=on`** | On **`post` only**: background **`headless-read.sh`** (`agy -p` when `AGENTS_ATTACH=agy\|antigravity`, or `interpreter exec --` when `interpreter`, then hook **`agents done`**) |
 
 **Do not use Open Interpreter to implement board posts.** It is a poor fit for commits, worktrees, and closing the board: subprocess sandboxes often deny writes to **`.git`** and **`agents.jsonl`**, and attach starts in the repo's **main checkout** unless you opened a worktree yourself. Use **`AGENTS_ATTACH=cursor`** (or open the sandbox **POST.md** in Cursor), do real edits on a **branch/worktree**, then run **`agents done ID "…"`** from your normal terminal. Interpreter attach is OK for **read-only** exploration before you switch to Cursor; **`AGENTS_HEADLESS_AUTO=on`** is the only supported unattended Interpreter path (read-only on **`post`**, not attach).
 
