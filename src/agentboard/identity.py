@@ -68,7 +68,7 @@ def session_id() -> Optional[str]:
         value: Optional[str] = re.sub(r"[^A-Za-z0-9._-]", "-", explicit)[:40]
     else:
         tool_id = tools.env(tools.named(actor()), "session_env").replace("-", "")[:4]
-        pid = agent_pid()
+        pid = agent_pid() if (tool_id or actor().startswith("agent:")) else None
         value = f"{tool_id}.{pid}" if tool_id and pid else tool_id or (f"p{pid}" if pid else None)
     _session[:] = [(key, value)]
     return value

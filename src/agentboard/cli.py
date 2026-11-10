@@ -236,13 +236,18 @@ def cmd_claim(
     """Say you're on something other sessions might also start, so they don't.
 
     A shared tool, a fix someone asked for, a cluster you're testing on. Others see it in `agents status`;
-    close it with `agents done ID`. With --paths, a session claiming an overlapping path is told whose
-    claim it overlaps (the claim is still made: you decide, or ask that session)."""
+    close it with `agents done ID`. With --paths or --ticket, a session claiming an overlapping path or
+    the same ticket (any repo) is told whose claim/hand-off it overlaps (the claim is still made: you decide,
+    or ask that session)."""
     _need_board()
+    rows = board.agent_posts()
     paths = [x.strip().strip("/") for x in paths or [] if x.strip().strip("/")]
-    for other in board.claim_overlaps(board.agent_posts(), identity.here(), paths) if paths else []:
-        console.print(f"[yellow]Overlaps open claim {other['id']}[/yellow] from {sender(other)} "
+    for other in board.claim_overlaps(rows, identity.here(), paths) if paths else []:
+        console.print(f"[yellow]Overlaps open claim {other['id']}[/yellow] from {sender(other)}{_live(other)} "
                       f"({', '.join(other['paths'])}): {other.get('text', '')}", highlight=False)
+    for other in board.ticket_overlaps(rows, ticket) if ticket else []:
+        console.print(f"[yellow]Overlaps open {other['kind']} {other['id']}[/yellow] on ticket {ticket} from "
+                      f"{sender(other)}{_live(other)}: {other.get('text', '')}", highlight=False)
     _post("claim", text, ticket, paths=paths or None)
 
 
@@ -380,21 +385,39 @@ def _kind(r: dict) -> str:
 
 
 def _what(r: dict) -> str:
-    """A row's text for status: a claim's paths, a reply's answer."""
+    """A row's text for status: its ticket, a claim's paths, a reply's answer."""
+    ticket = f"[{r['ticket']}] " if r.get("ticket") else ""
     if "reply" in r:
-        return f"{_compact(r.get('text', ''), 60)}  -> {sender(r['replied'])}: {r['reply']}"
+        return f"{ticket}{_compact(r.get('text', ''), 60)}  -> {sender(r['replied'])}: {r['reply']}"
     paths = f" [paths: {', '.join(r['paths'])}]" if r.get("paths") else ""
-    return r.get("text", "") + paths
+    return ticket + r.get("text", "") + paths
+
+
+def _divergence_detail(div: dict) -> str:
+    if not div.get("rebase_clean", True):
+        return f"CONFLICT: {', '.join(div['conflicts'])}" if div.get("conflicts") else "CONFLICT"
+    return "rebase clean" + (f"; {div['cherry_picked']} cherry-picked" if div.get("cherry_picked") else "")
 
 
 def _worktrees() -> list[str]:
-    """`branch  path` for each worktree of the repo you're in: which branch each session works on."""
+    """`branch  path` for each worktree of the repo you're in: which branch each session works on, and whether it is
+    behind the already-fetched `<remote>/<primary>` ref."""
     out, path = [], None
+    root_str = worktrees.main_checkout()
+    root = Path(root_str) if root_str else None
+    remote, up_main = worktrees.upstream_base(root) if root else ("origin", "main")
+    base_ref = f"refs/remotes/{remote}/{up_main}"
     for line in identity.git_here("worktree", "list", "--porcelain").splitlines():
         if line.startswith("worktree "):
             path = line.split(" ", 1)[1]
         elif line.startswith("branch ") and path:
-            out.append(f"{line.split(' ', 1)[1].removeprefix('refs/heads/')}  {path}")
+            branch = line.split(" ", 1)[1].removeprefix("refs/heads/")
+            note = ""
+            if root and branch and branch != up_main:
+                div = worktrees.divergence(root, branch, base_ref)
+                if div["behind"] > 0:
+                    note = f" (behind {remote}/{up_main} by {div['behind']}, {_divergence_detail(div)})"
+            out.append(f"{branch}  {path}{note}")
     return out
 
 
@@ -738,7 +761,7 @@ def _wait_thread(ref: str, timeout: float, every: float) -> None:
         print(f"Answer with: {_cmd()} reply {ref} \"...\", then {_cmd()} wait {ref} again (in the background).")
     since = board._seen().get(me) if me else None
     repo = identity.here()
-    if since and repo and not [r for r in board.board_news(board.agent_posts(), repo, me, since) if r.get("ref") != ref and r.get("id") != ref]:
+    if since and repo and not [r for r in board.board_asks(board.agent_posts(), repo, me, since) if r.get("ref") != ref and r.get("id") != ref]:
         board.mark_seen(me, max(since, new[-1].get("ts") or ""))
 
 
@@ -842,6 +865,7 @@ def _removable_here(repo: str) -> int:
 @agents_app.command("worktrees")
 def cmd_worktrees(
     all_repos: bool = typer.Option(True, "--all/--here", help="Every repo the board knows (default), or only the one you're in."),
+    fetch: bool = typer.Option(False, "--fetch", help="Fetch <remote>/<primary> in each repo before inspecting."),
     prune: bool = typer.Option(False, "--prune", help="Say which worktrees would be removed (worktree, local branch, origin branch); --yes does it."),
     yes: bool = typer.Option(False, "--yes", help="With --prune: remove them."),
     no_gh: bool = typer.Option(False, "--no-gh", help="Don't ask gh about merged PRs (squash merges then count as not merged)."),
@@ -859,6 +883,10 @@ def cmd_worktrees(
         roots[here] = Path(root)
     if not all_repos:
         roots = {here: roots[here]} if here in roots else {}
+    if fetch:
+        for r in roots.values():
+            remote, up_main = worktrees.upstream_base(r)
+            worktrees.git(r, "fetch", "--quiet", remote, up_main, timeout=30)
     items, live = _open_items(rows), board.sessions(rows, days=30)
     found = [e for repo, r in sorted(roots.items()) for e in worktrees.inspect(repo, r, items, live, use_gh=not no_gh)]
     if prune and yes:
@@ -874,7 +902,9 @@ def cmd_worktrees(
     for e in found:
         size = f", {e['size_mb']} MB" + (f" (.venv {e['venv_mb']} MB)" if e.get("venv_mb") else "") if e.get("size_mb") is not None else ""
         age = f", {e['age_days']}d old" if e.get("age_days") is not None else ""
-        state = ", ".join(x for x in ("merged" if e["merged"] else "not merged", "dirty" if e["dirty"] else "",
+        behind = (f"behind {e.get('upstream', 'origin/' + e['primary'])} by {e['behind']} ({_divergence_detail(e)})"
+                  if e.get("behind", 0) > 0 else "")
+        state = ", ".join(x for x in ("merged" if e["merged"] else "not merged", behind, "dirty" if e["dirty"] else "",
                                       f"{e['unpushed']} unpushed" if e["unpushed"] else "", "missing" if e["missing"] else "") if x)
         head = f"{e['repo']}  {e['branch'] or '(detached)'}  {e['path']}: {state}{age}{size}"
         if prune:

@@ -130,14 +130,18 @@ def test_claim_paths_warn_on_overlap_and_show_in_status(jdir, monkeypatch):
 
     monkeypatch.setattr(identity, "here", lambda: "tools")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
-    assert run("agents", "claim", "ghci fix", "-p", "src/tools/kit/").exit_code == 0
+    assert run("agents", "claim", "ghci fix", "-p", "src/tools/kit/", "-t", "CW-3220").exit_code == 0
     monkeypatch.setenv("AGENTS_SESSION", "bbbb")
     result = run("agents", "claim", "ghci timeout", "-p", "src/tools/kit/ghci.py")
     assert result.exit_code == 0 and "Overlaps open claim" in result.output and "tools-aaaa" in result.output
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    ticket_res = run("agents", "claim", "api side of ticket", "-t", "cw-3220")
+    assert ticket_res.exit_code == 0 and "on ticket cw-3220 from tools-aaaa" in ticket_res.output
     assert "Overlaps" not in run("agents", "claim", "docs", "-p", "docs/cli.md").output
     claims = json.loads(run("agents", "status", "--json").output)["claims"]
-    assert [c["paths"] for c in claims] == [["src/tools/kit"], ["src/tools/kit/ghci.py"], ["docs/cli.md"]]
-    assert "[paths: src/tools/kit]" in run("agents", "status").output
+    assert [c.get("paths") for c in claims] == [["src/tools/kit"], ["src/tools/kit/ghci.py"], None, ["docs/cli.md"]]
+    status_out = run("agents", "status").output
+    assert "[paths: src/tools/kit]" in status_out and "[CW-3220]" in status_out
 
 
 def test_pickup_turns_a_handoff_into_my_claim(jdir, monkeypatch):
@@ -842,11 +846,111 @@ def test_wait_thread_ignores_hook_bot_replies_until_real_reply_or_done(jdir, mon
     j.post("reply", "sandbox (api): /tmp/sandbox", ref=p["id"], actor="board:headless", session="headless", by="board")
     timed_out = run("agents", "wait", p["id"], "--timeout", "0.02", "--every", "0.01")
     assert timed_out.exit_code == 124
+    # Hook bot replies also stay out of status replies and board_asks
+    assert json.loads(run("agents", "status", "--json").output).get("replies") == []
 
     # A `done` (including from headless-read.sh) or real reply wakes `agents wait ID`
     j.post("done", "read-only answer", ref=p["id"], actor="board:headless", session="headless", by="board")
     woke = run("agents", "wait", p["id"], "--timeout", "1", "--every", "0.01")
     assert woke.exit_code == 0 and "read-only answer" in woke.output
+
+
+def test_status_scopes_claims_and_handoffs_to_current_repo_and_nudge_ignores_routine_all_and_claims(jdir, monkeypatch, capsys):
+    from agentboard import board as j
+    from agentboard import identity
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
+
+    monkeypatch.setattr(identity, "here", lambda: "api")
+    monkeypatch.setenv("AGENTS_SESSION", "bbbb")
+    j.post("claim", "api claim")
+    j.post("handoff", "api handoff")
+    j.post("post", "fyi for everyone", to="all")
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "cccc")
+    j.post("claim", "tools colleague claim")
+
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    # Routine --to all posts and other sessions' claims do not trigger [board] stderr nudge
+    j.nudge(["k8s", "find", "x"])
+    assert capsys.readouterr().err == ""
+
+    # Status in `tools` shows tools' claims, not api's claims or handoffs; `--all` shows both
+    tools_view = json.loads(run("agents", "status", "--json").output)
+    assert [c["text"] for c in tools_view["claims"]] == ["tools colleague claim"]
+    assert tools_view["handoffs"] == []
+    all_view = json.loads(run("agents", "status", "--all", "--json").output)
+    assert {c["text"] for c in all_view["claims"]} == {"api claim", "tools colleague claim"}
+    assert [h["text"] for h in all_view["handoffs"]] == ["api handoff"]
+
+
+def test_worktrees_behind_upstream_and_conflicts_in_status_and_worktrees(jdir, tmp_path, monkeypatch):
+    import subprocess
+
+    def git(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
+
+    upstream = tmp_path / "upstream.git"
+    git(tmp_path, "init", "--bare", "-b", "master", str(upstream))
+
+    repo = tmp_path / "des"
+    repo.mkdir()
+    git(repo, "init", "-b", "master")
+    git(repo, "remote", "add", "upstream", str(upstream))
+    (repo / "ci.yml").write_text("step: 1\n")
+    (repo / "readme.md").write_text("hello\n")
+    git(repo, "add", "ci.yml", "readme.md")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init")
+    git(repo, "push", "upstream", "master")
+
+    # Two worktrees: one that will conflict on ci.yml, one that will rebase cleanly with a cherry-picked commit
+    wt_conflict = tmp_path / "des-conflict"
+    wt_clean = tmp_path / "des-clean"
+    git(repo, "worktree", "add", "-b", "feat-conflict", str(wt_conflict))
+    git(repo, "worktree", "add", "-b", "feat-clean", str(wt_clean))
+
+    (wt_conflict / "ci.yml").write_text("step: conflict-branch\n")
+    git(wt_conflict, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-am", "branch ci change")
+
+    (wt_clean / "other.txt").write_text("clean work\n")
+    git(wt_clean, "add", "other.txt")
+    git(wt_clean, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "shared commit")
+    cherry_sha = subprocess.run(["git", "-C", str(wt_clean), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    (wt_clean / "more.txt").write_text("more clean work\n")
+    git(wt_clean, "add", "more.txt")
+    git(wt_clean, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "second clean commit")
+
+    # Advance upstream/master (modifying ci.yml first, then cherry-picking `shared commit` so its SHA differs)
+    clone = tmp_path / "pusher"
+    git(tmp_path, "clone", str(upstream), str(clone))
+    (clone / "ci.yml").write_text("step: upstream-master\n")
+    git(clone, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-am", "upstream ci change")
+    git(clone, "fetch", str(wt_clean), cherry_sha)
+    git(clone, "-c", "user.email=t@t", "-c", "user.name=t", "cherry-pick", "FETCH_HEAD")
+    git(clone, "push", "origin", "master")
+
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    run("agents", "claim", "working in des")
+
+    # `--fetch` fetches upstream/master and reports behind, conflict files, and cherry-picked count
+    wt_out = run("agents", "worktrees", "--here", "--no-gh", "--fetch").output
+    assert "behind upstream/master by 2 (CONFLICT: ci.yml)" in wt_out, wt_out
+    assert "behind upstream/master by 2 (rebase clean; 1 cherry-picked)" in wt_out, wt_out
+
+    wt_json = {e["branch"]: e for e in json.loads(run("agents", "worktrees", "--here", "--no-gh", "--json").output)}
+    assert wt_json["feat-conflict"]["behind"] == 2 and not wt_json["feat-conflict"]["rebase_clean"]
+    assert wt_json["feat-conflict"]["conflicts"] == ["ci.yml"]
+    assert wt_json["feat-clean"]["behind"] == 2 and wt_json["feat-clean"]["rebase_clean"]
+    assert wt_json["feat-clean"]["cherry_picked"] == 1
+
+    # `agents status` footer shows the behind/conflict note from local refs without network
+    status_out = run("agents", "status").output
+    assert "feat-conflict" in status_out and "(behind upstream/master by 2, CONFLICT: ci.yml)" in status_out
+    assert "feat-clean" in status_out and "(behind upstream/master by 2, rebase clean; 1 cherry-picked)" in status_out
 
 
 def test_load_wrappers_runs_entry_points_before_headless_env_defaults(jdir, monkeypatch, tmp_path):

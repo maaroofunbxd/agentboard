@@ -75,7 +75,10 @@ def test_gh_states_and_a_failed_check_is_soft(monkeypatch):
     item = Item(id="1", text="t", on="gh:acme/app#6174", ticket="PROJ-1")
     work_waits.check([item], NOW)
     assert item.state == "review" and "alice" in item.detail and not item.needs_you
-    answers["pr"] = {**answers["pr"], "reviewDecision": "APPROVED"}
+    answers["pr"] = {**answers["pr"], "mergeable": "CONFLICTING"}
+    work_waits.check([item], NOW)
+    assert item.state == "conflict" and item.needs_you and "merge conflict: needs rebase" in work_waits.line(item)
+    answers["pr"] = {**answers["pr"], "mergeable": "MERGEABLE", "reviewDecision": "APPROVED"}
     work_waits.check([item], NOW)
     assert item.state == "approved" and item.needs_you
     answers["pr"] = {**answers["pr"], "state": "MERGED"}

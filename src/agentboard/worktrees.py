@@ -7,6 +7,7 @@ branch or path, and no live session of the repo is on its branch. Everything els
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -56,6 +57,64 @@ def primary(root: Path) -> str:
         if git(root, "rev-parse", "--verify", "--quiet", f"refs/heads/{name}")[0] == 0:
             return name
     return "main"
+
+
+def upstream_base(root: Path) -> tuple[str, str]:
+    """(remote, primary) for `root`: GIT_PRIMARY_REMOTE / upstream / origin, and GIT_PRIMARY_BRANCH / dev.local /
+    main / master (matching gland's pre-push and git-sync). Base ref is `refs/remotes/{remote}/{primary}`."""
+    remote = os.environ.get("GIT_PRIMARY_REMOTE", "").strip()
+    if not remote:
+        for r in ("upstream", "origin"):
+            if git(root, "remote", "get-url", r)[0] == 0 or git(root, "for-each-ref", "--count=1", f"refs/remotes/{r}/")[1]:
+                remote = r
+                break
+        else:
+            remote = "origin"
+    branch = os.environ.get("GIT_PRIMARY_BRANCH", "").strip()
+    if not branch:
+        for b in ("dev.local", "main", "master"):
+            if (git(root, "show-ref", "--verify", "--quiet", f"refs/heads/{b}")[0] == 0
+                    or git(root, "show-ref", "--verify", "--quiet", f"refs/remotes/{remote}/{b}")[0] == 0):
+                branch = b
+                break
+        else:
+            branch = primary(root)
+    return remote, branch
+
+
+def _conflict_paths(out: str) -> list[str]:
+    head, _, _ = out.partition("\n\n")
+    paths: list[str] = []
+    for line in head.splitlines()[1:]:
+        if "\t" in line:
+            paths.append(line.split("\t", 1)[1].strip())
+        elif line.strip() and not line.startswith(("Auto-merging ", "CONFLICT ")):
+            paths.append(line.strip())
+    if not paths:
+        paths = [m.strip() for m in re.findall(r"^CONFLICT [^:]*: .*? in (.+)$", out, re.M)]
+    return list(dict.fromkeys(p for p in paths if p))
+
+
+def divergence(root: Path, branch: str, base_ref: str) -> dict:
+    """How `branch` compares to `base_ref` (e.g. refs/remotes/upstream/master): behind, ahead, rebase_clean,
+    conflicts (file paths from `git merge-tree --write-tree`), and cherry_picked (`-` lines in `git cherry`)."""
+    empty = {"behind": 0, "ahead": 0, "rebase_clean": True, "conflicts": [], "cherry_picked": 0}
+    if not branch or git(root, "rev-parse", "--verify", "--quiet", base_ref)[0] != 0:
+        return empty
+    b_cnt = git(root, "rev-list", "--count", f"{branch}..{base_ref}")[1]
+    a_cnt = git(root, "rev-list", "--count", f"{base_ref}..{branch}")[1]
+    behind = int(b_cnt) if b_cnt.isdigit() else 0
+    ahead = int(a_cnt) if a_cnt.isdigit() else 0
+    rebase_clean, conflicts, cherry_picked = True, [], 0
+    if behind > 0 and ahead > 0:
+        code, mt_out = git(root, "merge-tree", "--write-tree", base_ref, branch)
+        rebase_clean = code == 0
+        if not rebase_clean:
+            conflicts = _conflict_paths(mt_out)
+        ch_code, ch_out = git(root, "cherry", base_ref, branch)
+        if ch_code == 0:
+            cherry_picked = sum(1 for ln in ch_out.splitlines() if ln.startswith("-"))
+    return {"behind": behind, "ahead": ahead, "rebase_clean": rebase_clean, "conflicts": conflicts, "cherry_picked": cherry_picked}
 
 
 def listing(root: Path) -> list[dict]:
@@ -110,19 +169,24 @@ def holders(w: dict, repo: str, open_items: list[dict], sessions: list[dict]) ->
 
 
 def inspect(repo: str, root: Path, open_items: list[dict], sessions: list[dict], sizes: bool = True, use_gh: bool = True) -> list[dict]:
-    """Each worktree of `repo`: branch, merged, dirty, unpushed, age_days, size_mb, venv_mb, held_by, removable and
-    why (the reasons it is kept)."""
+    """Each worktree of `repo`: branch, merged, dirty, unpushed, behind, ahead, rebase_clean, conflicts,
+    cherry_picked, age_days, size_mb, venv_mb, held_by, removable and why (the reasons it is kept)."""
     main = primary(root)
+    remote, up_main = upstream_base(root)
+    base_ref = f"refs/remotes/{remote}/{up_main}"
     merged = set(git(root, "branch", "--format=%(refname:short)", "--merged", main)[1].splitlines())
     out = []
     for w in listing(root):
         path, branch = Path(w["path"]), w["branch"]
         missing = bool(w.get("missing")) or not path.is_dir()
-        e = {"repo": repo, "root": str(root), "path": str(path), "branch": branch, "primary": main, "missing": missing}
+        e = {"repo": repo, "root": str(root), "path": str(path), "branch": branch, "primary": main,
+             "upstream": f"{remote}/{up_main}", "missing": missing}
         e["merged"] = bool(branch) and branch != main and (branch in merged or (use_gh and pr_merged(root, branch)))
         e["dirty"] = not missing and bool(git(path, "status", "--porcelain")[1])
         count = git(root, "rev-list", "--count", branch, "--not", "--remotes", f"refs/heads/{main}")[1] if branch else ""
         e["unpushed"] = int(count) if count.isdigit() else 0
+        e.update(divergence(root, branch or "", base_ref) if branch and branch != up_main else
+                 {"behind": 0, "ahead": 0, "rebase_clean": True, "conflicts": [], "cherry_picked": 0})
         stamp = git(root, "log", "-1", "--format=%ct", branch)[1] if branch else ""
         e["age_days"] = int((time.time() - int(stamp)) // 86400) if stamp.isdigit() else None
         e["size_mb"] = size_mb(path) if sizes else None

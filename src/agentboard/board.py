@@ -187,15 +187,17 @@ def presence(rows: list[dict], repo: str, session: Optional[str] = None, skip: O
 
 def agents_view(rows: list[dict], now: Optional[datetime.datetime] = None, repo: Optional[str] = None) -> dict:
     """Open claims (stale after STALE_AFTER without a done), open hand-offs of the last week, and open posts of
-    the last POST_TTL. With `repo`, only the posts addressed to it (or to `all`); `elsewhere` counts the rest."""
+    the last POST_TTL. With `repo`, only that repo's claims and hand-offs and the posts addressed to it (or to `all`);
+    `elsewhere` counts the rest of the posts."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     stale_ts = (now - STALE_AFTER).strftime("%Y-%m-%dT%H:%M:%SZ")
     week_ts = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     ttl_ts = (now - POST_TTL).strftime("%Y-%m-%dT%H:%M:%SZ")
     closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
     claims = [{**r, "stale": r.get("ts", "") < stale_ts} for r in rows
-              if r.get("kind") == "claim" and r.get("id") not in closed]
-    handoffs = [r for r in rows if r.get("kind") == "handoff" and r.get("id") not in closed and r.get("ts", "") >= week_ts]
+              if r.get("kind") == "claim" and r.get("id") not in closed and (repo is None or r.get("repo") in (repo, None))]
+    handoffs = [r for r in rows if r.get("kind") == "handoff" and r.get("id") not in closed and r.get("ts", "") >= week_ts
+                and (repo is None or r.get("repo") in (repo, None))]
     every = [r for r in rows if r.get("kind") == "post" and r.get("id") not in closed and r.get("ts", "") >= ttl_ts]
     posts = [r for r in every if repo is None or r.get("to") in (repo, "all")]
     view = {"repo": repo, "claims": claims, "handoffs": handoffs, "posts": posts, "elsewhere": len(every) - len(posts)}
@@ -212,6 +214,8 @@ def replies(rows: list[dict], repo: str, since: str = "") -> list[dict]:
     posts = {r["id"]: r for r in rows if r.get("kind") in HEADS and r.get("id")}
     out = []
     for d in rows:
+        if d.get("kind") == "reply" and is_hook_bot(d):
+            continue
         asked = posts.get(d.get("ref")) if d.get("kind") in ("done", "reply") else None
         if not asked or d.get("ts", "") <= since:
             continue
@@ -239,6 +243,21 @@ def claim_overlaps(rows: list[dict], repo: Optional[str], paths: list[str]) -> l
     closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
     return [r for r in rows if r.get("kind") == "claim" and r.get("id") not in closed and r.get("repo") == repo
             and any(_paths_overlap(a, b) for a in r.get("paths") or [] for b in paths)]
+
+
+def ticket_overlaps(rows: list[dict], ticket: Optional[str]) -> list[dict]:
+    """Open claims and hand-offs (in any repo) on the same Jira/ticket key (`-t`, or the key in the text/branch)."""
+    key = (ticket or "").strip().upper()
+    if not key:
+        return []
+    closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
+    return [
+        r for r in rows
+        if r.get("kind") in ("claim", "handoff") and r.get("id") not in closed
+        and ((r.get("ticket") or "").strip().upper() == key
+             or (r.get("branch") or "").strip().upper() == key
+             or key in (r.get("text") or "").upper().split())
+    ]
 
 
 # ---- the nudge: a line on stderr when the board has something new for a session that already read it -------------
@@ -342,7 +361,7 @@ def nudge(argv: list[str]) -> None:
         repo = identity.here() if since else None
         if not repo:
             return
-        news = board_news(agent_posts(), repo, session, since)
+        news = board_asks(agent_posts(), repo, session, since)
         if not news:
             return
         from collections import Counter

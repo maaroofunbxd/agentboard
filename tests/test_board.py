@@ -49,10 +49,7 @@ def test_old_claims_go_stale_and_kinds_are_checked(jdir):
 
 
 def test_session_id_and_name(jdir, monkeypatch):
-    real_pid = identity.agent_pid
-    monkeypatch.setattr(identity, "agent_pid", lambda: None)
     assert identity.session_id() is None and "session" not in board.who()  # a person at a terminal
-    monkeypatch.setattr(identity, "agent_pid", real_pid)
     monkeypatch.setattr(identity, "_session", [])
     monkeypatch.setenv("AGENTS_ACTOR", "agent:claude-code")  # a tool in tools.py exports its session id and process
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "734bb659-c2f3-4289")
@@ -65,13 +62,14 @@ def test_session_id_and_name(jdir, monkeypatch):
     monkeypatch.setattr(identity, "_session", [])
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID")
     monkeypatch.delenv("CLAUDE_PID")
-    monkeypatch.delenv("AGENTS_ACTOR")
+    monkeypatch.setenv("AGENTS_ACTOR", "agent:codex")
     monkeypatch.setattr(identity, "agent_pid", lambda: 81234)
-    assert identity.session_id() == "p81234"  # any generic agent tool (even without AGENTS_ACTOR): its process
+    assert identity.session_id() == "p81234"  # a tool with no session id of its own: its process
     monkeypatch.setattr(identity, "_session", [])
     monkeypatch.setenv("AGENTS_SESSION", "codex 7/a")
     assert identity.session_id() == "codex-7-a"  # any tool can name its session
     monkeypatch.delenv("AGENTS_SESSION")
+    monkeypatch.delenv("AGENTS_ACTOR")
     monkeypatch.setattr(identity, "_session", [])
     monkeypatch.setenv("ANTIGRAVITY_AGENT", "1")
     monkeypatch.setenv("ANTIGRAVITY_CONVERSATION_ID", "436441b3-5518-474d-8c62-7398812368af")

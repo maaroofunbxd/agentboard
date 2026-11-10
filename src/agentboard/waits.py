@@ -55,11 +55,12 @@ def configure(**names: str) -> None:
 
 
 # States that put the next move with the user: merge / reply / read the answer / decide / meet the deadline.
-NEEDS_YOU = {"approved", "changes", "merged", "closed", "answered", "replied", "soon", "passed", "you"}
+NEEDS_YOU = {"approved", "changes", "conflict", "merged", "closed", "answered", "replied", "soon", "passed", "you"}
 LABELS = {"review": "waiting for review", "approved": "approved, not merged", "changes": "changes requested",
-          "merged": "merged", "closed": "closed", "draft": "draft", "open": "open", "replied": "a reply came",
-          "answered": "answered", "later": "deadline later", "soon": "due within 48h", "passed": "deadline passed",
-          "you": "your decision", "manual": "not checked automatically", "unchecked": "not checked"}
+          "conflict": "merge conflict: needs rebase", "merged": "merged", "closed": "closed", "draft": "draft",
+          "open": "open", "replied": "a reply came", "answered": "answered", "later": "deadline later",
+          "soon": "due within 48h", "passed": "deadline passed", "you": "your decision",
+          "manual": "not checked automatically", "unchecked": "not checked"}
 
 
 @dataclass
@@ -210,7 +211,7 @@ def _gh(*args: str) -> dict:
 def check_gh(item: Item) -> None:
     repo, number = GH.match(item.on).groups()
     try:
-        pr = _gh("pr", "view", number, "-R", repo, "--json", "state,reviewDecision,isDraft,url,title,reviewRequests")
+        pr = _gh("pr", "view", number, "-R", repo, "--json", "state,reviewDecision,isDraft,mergeable,url,title,reviewRequests")
     except RuntimeError as exc:
         if "no pull requests found" not in str(exc).lower() and "could not resolve to a pullrequest" not in str(exc).lower():
             raise
@@ -223,6 +224,8 @@ def check_gh(item: Item) -> None:
         item.state = "merged"
     elif pr.get("state") == "CLOSED":
         item.state = "closed"
+    elif pr.get("mergeable") == "CONFLICTING":
+        item.state = "conflict"
     elif pr.get("isDraft"):
         item.state = "draft"
     elif pr.get("reviewDecision") == "APPROVED":
