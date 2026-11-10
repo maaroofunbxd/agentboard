@@ -15,7 +15,7 @@ import sys
 from agentboard import config
 
 ATTACH_MODES = ("cursor", "antigravity", "agy", "interpreter")
-_ON = frozenset({"on", "1", "true", "yes", "interpreter", "antigravity", "agy"})  # tool names = legacy/convenience alias for on
+_ON = frozenset({"on", "1", "true", "yes", "read", "write", "interpreter", "antigravity", "agy"})  # tool names = legacy/convenience alias for on
 _OFF = frozenset({"off", "0", "no", "false", ""})
 
 _EXPORT_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
@@ -138,7 +138,9 @@ def agy_exec_argv(prompt: str) -> list[str]:
     custom = os.environ.get("AGENTS_AGY_CMD", "").strip()
     if custom:
         return [*custom.split(), prompt]
-    return ["agy", "-p", prompt]
+    if _raw_headless_auto_flag() == "read":
+        return ["agy", "-p", prompt]
+    return ["agy", "--mode", "accept-edits", "-p", prompt]
 
 
 def headless_exec_argv(prompt: str) -> list[str]:

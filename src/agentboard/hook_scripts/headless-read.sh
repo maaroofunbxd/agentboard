@@ -78,9 +78,11 @@ from agentboard.plugins import headless_auto
 print(headless_auto())
 " 2>/dev/null || echo off)"
 if [ "$AUTO" = "on" ] || [ -n "${AGENTS_HEADLESS_LLM:-}" ]; then
-  PROMPT="You are answering a read-only agents board post. Do not run shell commands. Do not edit files.
-Use only the context below. Output exactly one line starting with: ANSWER: 
-Then a short answer for agents done (plain text, no markdown fences).
+  PROMPT="You are handling an agents board post in repository ${TO} (${AGENTS_HEADLESS_ROOT}).
+If the post only asks a question, answer it without editing files.
+If the post asks to edit or create files in this repository, make the requested file changes using your file tools.
+Do not run shell commands (this hook script will close the board post for you).
+At the end of your response, output a single line starting with: ANSWER: followed by a short answer or summary of changes for agents done (plain text, no markdown fences).
 
 Context:
 $(cat "$CTX")"

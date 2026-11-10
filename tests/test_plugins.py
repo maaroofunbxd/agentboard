@@ -70,6 +70,8 @@ def test_attach_mode_antigravity(monkeypatch, tmp_path):
     assert plugins.attach_mode() == "agy"
     monkeypatch.setenv("AGENTS_HEADLESS_AUTO", "on")
     assert plugins.headless_auto_on() is True
+    assert plugins.headless_exec_argv("hi") == ["agy", "--mode", "accept-edits", "-p", "hi"]
+    monkeypatch.setenv("AGENTS_HEADLESS_AUTO", "read")
     assert plugins.headless_exec_argv("hi") == ["agy", "-p", "hi"]
 
 

@@ -22,4 +22,10 @@ Close with: agents done ${POST_ID} \"summary\"
 If blocked: agents reply ${POST_ID} \"blocked: reason\"
 Use the shell for every agents command; do not only describe them."
 
-exec interpreter exec -- "$PROMPT"
+export PROMPT
+exec "${AGENTS_PYTHON:-python3}" -c "
+import os
+from agentboard.plugins import headless_exec_argv
+argv = headless_exec_argv(os.environ['PROMPT'])
+os.execvp(argv[0], argv)
+"
