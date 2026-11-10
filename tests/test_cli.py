@@ -137,9 +137,10 @@ def test_claim_paths_warn_on_overlap_and_show_in_status(jdir, monkeypatch):
     monkeypatch.setattr(identity, "here", lambda: "api")
     ticket_res = run("agents", "claim", "api side of ticket", "-t", "cw-3220")
     assert ticket_res.exit_code == 0 and "on ticket cw-3220 from tools-aaaa" in ticket_res.output
+    monkeypatch.setattr(identity, "here", lambda: "tools")
     assert "Overlaps" not in run("agents", "claim", "docs", "-p", "docs/cli.md").output
     claims = json.loads(run("agents", "status", "--json").output)["claims"]
-    assert [c.get("paths") for c in claims] == [["src/tools/kit"], ["src/tools/kit/ghci.py"], None, ["docs/cli.md"]]
+    assert [c["paths"] for c in claims] == [["src/tools/kit"], ["src/tools/kit/ghci.py"], ["docs/cli.md"]]
     status_out = run("agents", "status").output
     assert "[paths: src/tools/kit]" in status_out and "[CW-3220]" in status_out
 
