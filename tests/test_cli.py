@@ -176,7 +176,7 @@ def test_a_reply_to_a_post_shows_in_the_senders_repo(jdir, monkeypatch):
     monkeypatch.setattr(identity, "here", lambda: "tools")
     [r] = json.loads(run("agents", "status", "--json").output)["replies"]
     assert r["id"] == p["id"] and r["reply"] == "8080, in the README (#12)"
-    assert "-> api-bbbb (" in run("agents", "status").output
+    assert "-> api-bbbb" in run("agents", "status").output
 
 
 def test_nudge_is_noop(jdir, monkeypatch, capsys):
@@ -610,7 +610,7 @@ def test_sessions_live_or_ended_and_whoami_names_the_process(jdir, monkeypatch):
     by = {r["name"]: r for r in rows}
     assert by[f"api-p{os.getpid()}"]["live"] is True and by[f"api-p{os.getpid()}"]["open"][0]["text"] == "mine, still running"
     assert by["api-ab12.4194303"]["live"] is False and by["api-nopid"]["live"] is None
-    states = {line.split(" ", 1)[0]: line.split(": ", 1)[1].split(",", 1)[0] for line in run("agents", "sessions").output.splitlines()}
+    states = {line.split(":", 1)[0].split(" ", 1)[0]: line.split(": ", 1)[1].split(",", 1)[0] for line in run("agents", "sessions").output.splitlines()}
     assert states == {f"api-p{os.getpid()}": "live", "api-ab12.4194303": "ended", "api-nopid": "unknown"}
     # the pid's process is younger than the session's first line: another process got that pid
     assert identity.alive(f"p{os.getpid()}", "2000-01-01T00:00:00Z") is False
