@@ -117,8 +117,8 @@ def divergence(root: Path, branch: str, base_ref: str) -> dict:
     return {"behind": behind, "ahead": ahead, "rebase_clean": rebase_clean, "conflicts": conflicts, "cherry_picked": cherry_picked}
 
 
-def listing(root: Path) -> list[dict]:
-    """`git worktree list` of `root`, without the main checkout: path, branch (None when detached), missing."""
+def listing(root: Path, *, include_main: bool = False) -> list[dict]:
+    """`git worktree list` of `root` (without the main checkout unless `include_main=True`): path, branch (None when detached), missing."""
     out: list[dict] = []
     for line in git(root, "worktree", "list", "--porcelain")[1].splitlines():
         if line.startswith("worktree "):
@@ -127,7 +127,53 @@ def listing(root: Path) -> list[dict]:
             out[-1]["branch"] = line.split(" ", 1)[1].removeprefix("refs/heads/")
         elif line.startswith("prunable") and out:
             out[-1]["missing"] = True
+    if include_main and not out and root.is_dir():
+        out.append({"path": str(root), "branch": git(root, "branch", "--show-current")[1] or None})
+    if include_main:
+        return out
     return [w for w in out if Path(w["path"]).resolve() != root.resolve()]
+
+
+def dirty_tracked_count(path: Path) -> int:
+    """Count of uncommitted tracked changes in `path` (`git status --porcelain --untracked-files=no`)."""
+    if not path.is_dir():
+        return 0
+    code, out = git(path, "status", "--porcelain", "--untracked-files=no")
+    return len([ln for ln in out.splitlines() if ln.strip()]) if code == 0 and out else 0
+
+
+def unpushed_count(root: Path, branch: Optional[str], main: str) -> int:
+    """Commits on `branch` not on any remote (or ahead of `main` when the repo has no remote refs)."""
+    if not branch:
+        return 0
+    has_remotes = bool(git(root, "for-each-ref", "--count=1", "refs/remotes/")[1])
+    if has_remotes:
+        count = git(root, "rev-list", "--count", branch, "--not", "--remotes")[1]
+    elif branch != main:
+        count = git(root, "rev-list", "--count", branch, "--not", f"refs/heads/{main}")[1]
+    else:
+        return 0
+    return int(count) if count.isdigit() else 0
+
+
+def checkout_last_ts(path: Path, branch: Optional[str] = None) -> Optional[int]:
+    """Unix timestamp of latest commit on `branch` (or HEAD) or working-tree modified tracked file in `path`."""
+    if not path.is_dir():
+        return None
+    stamp = git(path, "log", "-1", "--format=%ct", branch or "HEAD")[1]
+    stamps: list[int] = [int(stamp)] if stamp.isdigit() else []
+    code, out = git(path, "status", "--porcelain", "--untracked-files=no")
+    if code == 0 and out:
+        for ln in out.splitlines():
+            parts = ln.strip().split(None, 1)
+            if len(parts) < 2:
+                continue
+            rel = parts[1].split(" -> ")[-1].strip('"')
+            try:
+                stamps.append(int((path / rel).stat().st_mtime))
+            except OSError:
+                pass
+    return max(stamps) if stamps else None
 
 
 def size_mb(path: Path) -> Optional[int]:
@@ -168,7 +214,8 @@ def holders(w: dict, repo: str, open_items: list[dict], sessions: list[dict]) ->
     return out
 
 
-def inspect(repo: str, root: Path, open_items: list[dict], sessions: list[dict], sizes: bool = True, use_gh: bool = True) -> list[dict]:
+def inspect(repo: str, root: Path, open_items: list[dict], sessions: list[dict], sizes: bool = True, use_gh: bool = True,
+            include_main: bool = False) -> list[dict]:
     """Each worktree of `repo`: branch, merged, dirty, unpushed, behind, ahead, rebase_clean, conflicts,
     cherry_picked, age_days, size_mb, venv_mb, held_by, removable and why (the reasons it is kept)."""
     main = primary(root)
@@ -176,23 +223,27 @@ def inspect(repo: str, root: Path, open_items: list[dict], sessions: list[dict],
     base_ref = f"refs/remotes/{remote}/{up_main}"
     merged = set(git(root, "branch", "--format=%(refname:short)", "--merged", main)[1].splitlines())
     out = []
-    for w in listing(root):
+    for w in listing(root, include_main=include_main):
         path, branch = Path(w["path"]), w["branch"]
         missing = bool(w.get("missing")) or not path.is_dir()
+        is_main = not missing and path.resolve() == root.resolve()
         e = {"repo": repo, "root": str(root), "path": str(path), "branch": branch, "primary": main,
-             "upstream": f"{remote}/{up_main}", "missing": missing}
+             "upstream": f"{remote}/{up_main}", "missing": missing, "is_main": is_main}
         e["merged"] = bool(branch) and branch != main and (branch in merged or (use_gh and pr_merged(root, branch)))
         e["dirty"] = not missing and bool(git(path, "status", "--porcelain")[1])
-        count = git(root, "rev-list", "--count", branch, "--not", "--remotes", f"refs/heads/{main}")[1] if branch else ""
-        e["unpushed"] = int(count) if count.isdigit() else 0
+        e["dirty_count"] = dirty_tracked_count(path) if not missing else 0
+        e["unpushed"] = unpushed_count(root, branch, main)
         e.update(divergence(root, branch or "", base_ref) if branch and branch != up_main else
                  {"behind": 0, "ahead": 0, "rebase_clean": True, "conflicts": [], "cherry_picked": 0})
         stamp = git(root, "log", "-1", "--format=%ct", branch)[1] if branch else ""
         e["age_days"] = int((time.time() - int(stamp)) // 86400) if stamp.isdigit() else None
+        e["last_ts"] = checkout_last_ts(path, branch) if not missing else None
         e["size_mb"] = size_mb(path) if sizes else None
         e["venv_mb"] = size_mb(path / ".venv") if sizes else None
         e["held_by"] = holders(w, repo, open_items, sessions)
         why = []
+        if is_main:
+            why.append("main checkout")
         if not branch:
             why.append("detached HEAD")
         elif branch == main:
@@ -206,6 +257,49 @@ def inspect(repo: str, root: Path, open_items: list[dict], sessions: list[dict],
         why += [f"held by {h}" for h in e["held_by"]]
         e["why"], e["removable"] = why, not why
         out.append(e)
+    return out
+
+
+def inspect_checkouts(
+    rows: Optional[list[dict]] = None,
+    *,
+    include_main: bool = True,
+    skip_repos: tuple[str, ...] | set[str] | list[str] = ("work",),
+) -> list[dict]:
+    """Inspect every repo in `repo_roots(rows)` (main checkout + secondary worktrees by default).
+    Returns entries with: repo, root, path, branch, primary, is_main, dirty (count of uncommitted tracked changes
+    via `git status --porcelain --untracked-files=no`), unpushed (commits ahead of remote tracking or primary),
+    last_ts (unix timestamp of latest commit or working-tree modified file), and held_by (open claims/handoffs)."""
+    from agentboard import board
+
+    if rows is None:
+        rows = board.agent_posts()
+    skip = set(skip_repos or ())
+    roots = repo_roots(rows)
+    view = board.agents_view(rows)
+    open_items = view["claims"] + view["handoffs"]
+    live_sessions = board.sessions(rows, days=30)
+    out: list[dict] = []
+    for repo, root in sorted(roots.items()):
+        if repo in skip or not root.is_dir():
+            continue
+        main = primary(root)
+        for w in listing(root, include_main=include_main):
+            path, branch = Path(w["path"]), w["branch"]
+            if w.get("missing") or not path.is_dir():
+                continue
+            out.append({
+                "repo": repo,
+                "root": str(root),
+                "path": str(path),
+                "branch": branch,
+                "primary": main,
+                "is_main": path.resolve() == root.resolve(),
+                "dirty": dirty_tracked_count(path),
+                "unpushed": unpushed_count(root, branch, main),
+                "last_ts": checkout_last_ts(path, branch),
+                "held_by": holders(w, repo, open_items, live_sessions),
+            })
     return out
 
 

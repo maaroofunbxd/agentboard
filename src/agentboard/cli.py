@@ -46,7 +46,7 @@ from agentboard.store import FileStore
 console = Console()
 
 agents_app = typer.Typer(
-    help="The board between AI agent sessions, any repo: whoami, status (what's for this repo), post --to REPO|REPO-SESSION, reply, claim, handoff, pickup, done, wait, sessions.",
+    help="The board between AI agent sessions, any repo: whoami, status (what's for this repo), post --to REPO|REPO-SESSION, reply, claim, handoff, pickup, park, done, wait, sessions.",
     no_args_is_help=True,
 )
 
@@ -185,6 +185,43 @@ def local_file(repo: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def wrapup_notice(now: Optional[object] = None) -> Optional[str]:
+    """Evening wrap-up notice when local time is in the wrap-up window (default 20:00 to 04:00 local time;
+    configurable via $AGENTS_WRAPUP_AT / config.settings.env('WRAPUP_AT'), e.g. '20:00' or 'off', disabled under
+    PYTEST_CURRENT_TEST / CI unless explicitly set or `now` is passed)."""
+    import datetime
+    import os
+
+    raw = os.environ.get(config.settings.env("WRAPUP_AT"), "").strip()
+    if raw.lower() in ("off", "0", "no", "false"):
+        return None
+    if not raw and now is None and (os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("CI")):
+        return None
+    h, m = 20, 0
+    if raw and raw.lower() not in ("on", "1", "yes", "always"):
+        parts = raw.split(":", 1)
+        if parts[0].isdigit() and (len(parts) == 1 or parts[1].isdigit()):
+            cand_h, cand_m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+            if 0 <= cand_h < 24 and 0 <= cand_m < 60:
+                h, m = cand_h, cand_m
+    dt = now if isinstance(now, datetime.datetime) else datetime.datetime.now().astimezone()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.datetime.now().astimezone().tzinfo)
+    hm = (dt.hour, dt.minute)
+    if raw.lower() in ("on", "1", "yes", "always"):
+        active = True
+    elif (h, m) >= (4, 0):
+        active = hm >= (h, m) or hm < (4, 0)
+    else:
+        active = hm >= (h, m)
+    if not active:
+        return None
+    tz = dt.strftime("%Z") or "local"
+    return (
+        f"[wrap-up] It is {dt:%H:%M} {tz} (past {h:02d}:{m:02d} wrap-up time): nudge the user to stop starting "
+        "new work, wrap up today's items (agents handoff / unbxd work today --evening), and rest."
+    )
+
 
 @agents_app.command("whoami")
 def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
@@ -201,9 +238,12 @@ def cmd_whoami(json_output: bool = typer.Option(False, "--json")) -> None:
             "tool_session": identity.tool_session() or None,
             "board": str(where.path(board.AGENTS)) if hasattr(where, "path") else type(where).__name__ if where else None}
     text, source = local_file(repo)
+    notice = wrapup_notice()
     if json_output:
-        print_json({**info, "local": text, "local_from": source})
+        print_json({**info, "local": text, "local_from": source, **({"wrapup": notice} if notice else {})})
         return
+    if notice:
+        console.print(notice, style="bold yellow", markup=False, highlight=False, soft_wrap=True)
     if not info["name"]:
         console.print(f"No session id ({info['actor']}): an agent sets {config.settings.env('SESSION')}=<name> on its commands to get one.")
     else:
@@ -237,6 +277,10 @@ def cmd_claim(
     the same ticket (any repo) is told whose claim/hand-off it overlaps (the claim is still made: you decide,
     or ask that session)."""
     _need_board()
+    _live_cache.clear()
+    notice = wrapup_notice()
+    if notice:
+        console.print(notice, style="bold yellow", markup=False, highlight=False, soft_wrap=True)
     rows = board.agent_posts()
     paths = [x.strip().strip("/") for x in paths or [] if x.strip().strip("/")]
     for other in board.claim_overlaps(rows, identity.here(), paths) if paths else []:
@@ -785,6 +829,7 @@ def cmd_status(
 
 
 def _show_status(*, repo: Optional[str], all_repos: bool, this_session: bool, history: bool, json_output: bool, warn: bool) -> None:
+    _live_cache.clear()
     sid = identity.session_id()
     if warn:
         _warn_other_boards()
@@ -802,6 +847,10 @@ def _show_status(*, repo: Optional[str], all_repos: bool, this_session: bool, hi
     if json_output:
         print_json(view)
         return
+    if warn:
+        notice = wrapup_notice()
+        if notice:
+            console.print(notice, style="bold yellow", markup=False, highlight=False, soft_wrap=True)
     where = "of this session" if this_session else f"for {repo}" if repo else "every repo"
     if not any(view.get(k) for k in ("posts", "claims", "handoffs", "replies")) and not history:
         console.print(f"[dim]Nothing on the board {where}." + (f" {view['elsewhere']} post(s) for other repos: --all." if view["elsewhere"] else "") + "[/dim]")
@@ -916,6 +965,176 @@ def cmd_worktrees(
         print(f"{n} worktree(s) ({mb} MB) would be removed: {_cmd()} worktrees --prune --yes")
     elif not prune and n:
         print(f"{n} worktree(s) ({mb} MB) can be removed: {_cmd()} worktrees --prune")
+
+
+def _resolve_claim_checkout(claim: dict, root: Optional[Path], repo_wts: list[dict], *, use_gh: bool) -> dict:
+    """Resolve a claim's branch, checkout path, primary branch, merged state, and dirty/unpushed counts."""
+    import re
+
+    c_branch = claim.get("branch")
+    if not root or not root.is_dir():
+        return {"branch": c_branch, "path": Path(claim["root"]) if claim.get("root") else None,
+                "primary": "main", "merged": False, "dirty_any": False, "dirty_tracked": 0, "unpushed": 0}
+    main = worktrees.primary(root)
+    merged_set = set(worktrees.git(root, "branch", "--format=%(refname:short)", "--merged", main)[1].splitlines())
+    local_set = set(worktrees.git(root, "branch", "--format=%(refname:short)")[1].splitlines())
+    tag = f"claim {claim['id']}"
+    matched_wt = next((w for w in repo_wts if tag in w.get("held_by", [])), None)
+    if matched_wt is None and c_branch and c_branch != main:
+        matched_wt = next((w for w in repo_wts if w.get("branch") == c_branch), None)
+    branch: Optional[str] = None
+    wt_path: Path = root
+    if matched_wt is not None:
+        branch = matched_wt.get("branch")
+        wt_path = Path(matched_wt["path"])
+        merged = bool(matched_wt.get("merged"))
+    else:
+        text = claim.get("text", "")
+        m = re.search(r"\bbranch\s+([\w./-]+)", text)
+        if m:
+            branch = m.group(1).rstrip(".,;:")
+        else:
+            for b in sorted(local_set - {main}, key=len, reverse=True):
+                if re.search(rf"(?<![\w/.-]){re.escape(b)}(?![\w/-])", text):
+                    branch = b
+                    break
+            else:
+                branch = c_branch
+        wt_for_branch = next((w for w in repo_wts if branch and w.get("branch") == branch), None)
+        if wt_for_branch is not None:
+            wt_path = Path(wt_for_branch["path"])
+        merged = bool(branch and branch != main and (branch in merged_set or (use_gh and worktrees.pr_merged(root, branch))))
+    dirty_any, dirty_tracked = False, 0
+    if wt_path.is_dir():
+        cur_br = worktrees.git(wt_path, "branch", "--show-current")[1] or None
+        if wt_path.resolve() != root.resolve() or cur_br == branch:
+            dirty_any = bool(worktrees.git(wt_path, "status", "--porcelain")[1])
+            dirty_tracked = worktrees.dirty_tracked_count(wt_path)
+    unpushed = worktrees.unpushed_count(root, branch, main) if branch else 0
+    return {"branch": branch, "path": wt_path, "primary": main, "merged": merged,
+            "dirty_any": dirty_any, "dirty_tracked": dirty_tracked, "unpushed": unpushed}
+
+
+@agents_app.command("park")
+def cmd_park(
+    all_repos: bool = typer.Option(False, "--all", help="Inspect open claims across every repo on the board, not only the one you're in."),
+    force: bool = typer.Option(False, "--force", help="Also park open claims of live or unknown-liveness sessions, not only ended ones."),
+    commit_wip: bool = typer.Option(False, "--commit-wip", help="Commit uncommitted tracked changes on a non-primary branch as 'WIP: <claim text>' before parking."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be auto-closed or parked; change nothing."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Apply changes without prompting."),
+    no_gh: bool = typer.Option(False, "--no-gh", help="Don't ask gh about merged PRs."),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Auto-close open claims whose branch is already merged, and park unmerged claims from ended sessions (or all with
+    --force) into resumable hand-offs."""
+    _need_board()
+    _ = yes
+    rows = board.agent_posts()
+    here = identity.here()
+    repo = None if all_repos else here
+    claims = board.agents_view(rows, repo=repo)["claims"]
+    roots = worktrees.repo_roots(rows)
+    root_here = worktrees.main_checkout()
+    if here and root_here:
+        roots[here] = Path(root_here)
+    sess_list = board.sessions(rows, days=3650)
+    sess_map = {(s["repo"], s["session"]): s for s in sess_list}
+    open_items = _open_items(rows)
+    wts_by_repo: dict[str, list[dict]] = {}
+    for c in claims:
+        c_repo = c.get("repo")
+        if c_repo and c_repo not in wts_by_repo and c_repo in roots:
+            wts_by_repo[c_repo] = worktrees.inspect(c_repo, roots[c_repo], open_items, sess_list, sizes=False, use_gh=not no_gh)
+    actions: list[dict] = []
+    for c in claims:
+        c_repo = c.get("repo")
+        c_root = roots.get(c_repo) if c_repo else None
+        info = _resolve_claim_checkout(c, c_root, wts_by_repo.get(c_repo or "", []), use_gh=not no_gh)
+        branch, wt_path, main = info["branch"], info["path"], info["primary"]
+        if branch and branch != main and info["merged"] and not info["dirty_any"]:
+            done_text = f"auto-closed: branch {branch} merged"
+            if not dry_run:
+                board.post("done", done_text, ref=c["id"])
+            actions.append({
+                "claim_id": c["id"], "repo": c_repo, "session": c.get("session"), "branch": branch,
+                "path": str(wt_path) if wt_path else None, "action": "auto-closed",
+                "done": done_text, "dry_run": dry_run,
+            })
+            continue
+        sess = sess_map.get((c_repo, c.get("session")))
+        live = sess["live"] if sess is not None else board.session_live(c)
+        if not (live is False or force):
+            continue
+        dirty_tracked = info["dirty_tracked"]
+        unpushed = info["unpushed"]
+        wip_committed = False
+        if commit_wip and wt_path and wt_path.is_dir() and branch and branch != main and dirty_tracked > 0:
+            cur_br = worktrees.git(wt_path, "branch", "--show-current")[1] or None
+            if cur_br == branch:
+                if dry_run:
+                    wip_committed = True
+                    dirty_tracked = 0
+                    unpushed += 1
+                else:
+                    worktrees.git(wt_path, "add", "-u")
+                    wip_msg = f"WIP: {c.get('text', '')}"
+                    code, _ = worktrees.git(wt_path, "commit", "-m", wip_msg)
+                    if code != 0:
+                        code, _ = worktrees.git(wt_path, "-c", "user.name=agentboard", "-c", "user.email=agentboard@local", "commit", "-m", wip_msg)
+                    if code == 0:
+                        wip_committed = True
+                        dirty_tracked = worktrees.dirty_tracked_count(wt_path)
+                        unpushed = worktrees.unpushed_count(c_root, branch, main) if c_root else unpushed + 1
+        if dry_run and wip_committed:
+            last_commit = f"WIP: {c.get('text', '')}"
+        elif c_root and branch:
+            last_commit = worktrees.git(wt_path or c_root, "log", "-1", "--oneline", branch)[1] or "no commits"
+        elif wt_path and wt_path.is_dir():
+            last_commit = worktrees.git(wt_path, "log", "-1", "--oneline", "HEAD")[1] or "no commits"
+        else:
+            last_commit = c.get("text", "in progress")
+        state_parts = [f"{dirty_tracked} uncommitted" if dirty_tracked else "clean"]
+        if unpushed:
+            state_parts.append(f"{unpushed} unpushed")
+        state_str = ", ".join(state_parts)
+        actor = (sess.get("actor") if sess else None) or c.get("actor")
+        tool_session = (sess.get("tool_session") if sess else None) or c.get("tool_session")
+        tool = agent_tools.named(actor)
+        resume_cmd = tool.resume.format(session=tool_session) if tool and tool.resume and tool_session else None
+        next_step = f"{resume_cmd} (or {_cmd()} pickup)" if resume_cmd else f"{_cmd()} pickup"
+        loc_branch = branch or c.get("branch") or "(detached)"
+        loc_path = str(wt_path or c_root or c.get("root") or c_repo or ".")
+        handoff_text = f"done: {last_commit}; left: {loc_branch} in {loc_path} ({state_str}); next: {next_step}"
+        handoff_id = "<new_id>"
+        if not dry_run:
+            h_entry = board.post(
+                "handoff", handoff_text, ticket=c.get("ticket"), paths=c.get("paths"),
+                repo=c_repo, branch=branch or c.get("branch"), root=str(c_root) if c_root else c.get("root"),
+            )
+            handoff_id = h_entry["id"]
+            done_text = f"parked -> handoff {handoff_id}"
+            board.post("done", done_text, ref=c["id"])
+        else:
+            done_text = f"parked -> handoff {handoff_id}"
+        actions.append({
+            "claim_id": c["id"], "repo": c_repo, "session": c.get("session"), "branch": loc_branch,
+            "path": loc_path, "action": "parked", "wip_committed": wip_committed,
+            "handoff_id": None if dry_run else handoff_id, "handoff": handoff_text,
+            "done": done_text, "dry_run": dry_run,
+        })
+    if json_output:
+        print_json(actions)
+        return
+    if not actions:
+        console.print("[dim]Nothing to auto-close or park.[/dim]")
+        return
+    for a in actions:
+        if a["action"] == "auto-closed":
+            verb = "[yellow][dry-run] Would auto-close[/yellow]" if dry_run else "[green]Auto-closed[/green]"
+            console.print(f"{verb} claim {a['claim_id']} ({a['repo']}): {a['done']}", highlight=False)
+        else:
+            verb = "[yellow][dry-run] Would park[/yellow]" if dry_run else "[green]Parked[/green]"
+            console.print(f"{verb} claim {a['claim_id']} ({a['repo']}) ({a['done']}): {a['handoff']}", highlight=False)
 
 
 def _ago(ts: Optional[str], now: Optional[float] = None) -> str:

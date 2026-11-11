@@ -971,3 +971,158 @@ def test_load_wrappers_runs_entry_points_before_headless_env_defaults(jdir, monk
     assert os.environ.get("AGENTS_ATTACH") == "interpreter"
 
 
+def test_wrapup_notice_in_whoami_status_and_claim(jdir, monkeypatch):
+    import datetime
+
+    from agentboard import cli, identity
+
+    monkeypatch.setattr(identity, "here", lambda: "tools")
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+
+    # Disabled by default under PYTEST_CURRENT_TEST when now is None and WRAPUP_AT is unset
+    assert cli.wrapup_notice() is None
+
+    tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30), "IST")
+    daytime = datetime.datetime(2026, 11, 10, 14, 30, tzinfo=tz)
+    late = datetime.datetime(2026, 11, 10, 21, 15, tzinfo=tz)
+    early_am = datetime.datetime(2026, 11, 11, 1, 5, tzinfo=tz)
+    assert cli.wrapup_notice(daytime) is None
+    notice = cli.wrapup_notice(late)
+    assert notice == (
+        "[wrap-up] It is 21:15 IST (past 20:00 wrap-up time): nudge the user to stop starting "
+        "new work, wrap up today's items (agents handoff / unbxd work today --evening), and rest."
+    )
+    assert cli.wrapup_notice(early_am) is not None and "01:05 IST" in cli.wrapup_notice(early_am)
+
+    monkeypatch.setenv("AGENTS_WRAPUP_AT", "off")
+    assert cli.wrapup_notice(late) is None
+
+    monkeypatch.setenv("AGENTS_WRAPUP_AT", "00:00")
+    whoami_out = run("agents", "whoami").output.splitlines()
+    assert whoami_out[0].startswith("[wrap-up] It is ") and "past 00:00 wrap-up time" in whoami_out[0]
+    assert sum(1 for ln in whoami_out if ln.startswith("[wrap-up]")) == 1
+    status_out = run("agents", "status").output.splitlines()
+    assert status_out[0].startswith("[wrap-up] It is ")
+    claim_out = run("agents", "claim", "late fix").output.splitlines()
+    assert claim_out[0].startswith("[wrap-up] It is ")
+
+
+def test_inspect_checkouts_includes_main_checkout_and_worktrees(jdir, tmp_path, monkeypatch):
+    import subprocess
+
+    from agentboard import board as j
+    from agentboard import worktrees
+
+    def git(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
+
+    remote = tmp_path / "des-origin.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(remote))
+
+    des = tmp_path / "des"
+    des.mkdir()
+    git(des, "init", "-b", "main")
+    git(des, "remote", "add", "origin", str(remote))
+    (des / "app.py").write_text("v1\n")
+    (des / "cfg.py").write_text("c1\n")
+    git(des, "add", "app.py", "cfg.py")
+    git(des, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "initial")
+    git(des, "push", "-u", "origin", "main")
+
+    # Make 1 unpushed commit on main and 2 uncommitted tracked changes (+ 1 untracked file ignored by dirty count)
+    (des / "app.py").write_text("v2\n")
+    git(des, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-am", "unpushed on main")
+    (des / "app.py").write_text("v3-dirty\n")
+    (des / "cfg.py").write_text("c2-dirty\n")
+    (des / "untracked.txt").write_text("scratch\n")
+
+    wt = tmp_path / "des-feat"
+    git(des, "worktree", "add", "-b", "feat-x", str(wt))
+    (wt / "app.py").write_text("feat-change\n")
+
+    work_repo = tmp_path / "work"
+    work_repo.mkdir()
+    git(work_repo, "init", "-b", "main")
+    (work_repo / "notes.md").write_text("n1\n")
+    git(work_repo, "add", "notes.md")
+    git(work_repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "init work")
+
+    monkeypatch.chdir(des)
+    monkeypatch.setenv("AGENTS_SESSION", "aaaa")
+    claim = j.post("claim", "des feat-x work, branch feat-x")
+
+    monkeypatch.chdir(work_repo)
+    j.post("claim", "work note")
+
+    rows = j.agent_posts()
+    checkouts = worktrees.inspect_checkouts(rows)
+    assert all(c["repo"] != "work" for c in checkouts)  # skip_repos=('work',) by default
+    by_branch = {c["branch"]: c for c in checkouts if c["repo"] == "des"}
+    assert set(by_branch) == {"main", "feat-x"}
+    assert by_branch["main"]["is_main"] is True
+    assert by_branch["main"]["dirty"] == 2 and by_branch["main"]["unpushed"] == 1
+    assert isinstance(by_branch["main"]["last_ts"], int) and by_branch["main"]["last_ts"] > 0
+    assert by_branch["feat-x"]["is_main"] is False
+    assert by_branch["feat-x"]["dirty"] == 1 and by_branch["feat-x"]["unpushed"] == 1
+    assert f"claim {claim['id']}" in by_branch["feat-x"]["held_by"]
+
+
+def test_agents_park_autocompletes_merged_and_parks_unmerged_into_handoff(jdir, tmp_path, monkeypatch):
+    import subprocess
+
+    from agentboard import identity
+
+    def git(cwd, *a):
+        subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
+
+    repo = tmp_path / "api"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    (repo / "service.py").write_text("v1\n")
+    git(repo, "add", "service.py")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "initial")
+
+    # 1) Merged branch `feat-merged` (already merged into main, clean)
+    wt_merged = tmp_path / "api-merged"
+    git(repo, "worktree", "add", "-b", "feat-merged", str(wt_merged))
+
+    # 2) Unmerged branch `feat-wip` with uncommitted tracked changes, held by an ended Antigravity session
+    wt_wip = tmp_path / "api-wip"
+    git(repo, "worktree", "add", "-b", "feat-wip", str(wt_wip))
+    (wt_wip / "service.py").write_text("v2-wip-dirty\n")
+
+    monkeypatch.chdir(repo)
+    monkeypatch.delenv("AGENTS_ACTOR", raising=False)
+    monkeypatch.setenv("ANTIGRAVITY_AGENT", "1")
+    monkeypatch.setenv("ANTIGRAVITY_CONVERSATION_ID", "49a395ec-5461-4d5a-9395-25cb6a004557")
+    monkeypatch.setenv("AGENTS_AGENT_PID", "4194303")  # ended process
+    monkeypatch.setattr(identity, "_session", [])
+
+    run("agents", "claim", "merged task, branch feat-merged")
+    run("agents", "claim", "unmerged wip task, branch feat-wip", "-t", "CW-4200", "-p", "service.py")
+    claims = json.loads(run("agents", "status", "--json").output)["claims"]
+    assert len(claims) == 2
+
+    # Dry-run changes nothing
+    dry = json.loads(run("agents", "park", "--no-gh", "--commit-wip", "--dry-run", "--json").output)
+    assert {a["action"] for a in dry} == {"auto-closed", "parked"}
+    assert len(json.loads(run("agents", "status", "--json").output)["claims"]) == 2
+
+    # Actual park with --commit-wip: auto-closes merged claim and commits WIP + converts unmerged claim to handoff
+    parked = json.loads(run("agents", "park", "--no-gh", "--commit-wip", "--yes", "--json").output)
+    by_action = {a["action"]: a for a in parked}
+    assert by_action["auto-closed"]["done"] == "auto-closed: branch feat-merged merged"
+    p_item = by_action["parked"]
+    assert p_item["wip_committed"] is True
+    assert p_item["done"] == f"parked -> handoff {p_item['handoff_id']}"
+    assert "WIP: unmerged wip task, branch feat-wip" in p_item["handoff"]
+    assert f"left: feat-wip in {wt_wip} (clean, 1 unpushed)" in p_item["handoff"]
+    assert "next: agy --conversation 49a395ec-5461-4d5a-9395-25cb6a004557 (or agents pickup)" in p_item["handoff"]
+
+    view = json.loads(run("agents", "status", "--json").output)
+    assert view["claims"] == []
+    [h] = view["handoffs"]
+    assert h["id"] == p_item["handoff_id"] and h["ticket"] == "CW-4200" and h["paths"] == ["service.py"]
+
+
+

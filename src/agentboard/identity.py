@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,7 @@ from agentboard import config, tools
 
 SHELLS = {"sh", "bash", "zsh", "dash", "fish", "ksh", "csh", "tcsh", "env", "uv", "uvx", "timeout", "sudo", "login"}
 _session: list = []  # [(the environment it was worked out from, the answer)]: once per process
+_PROCESS_START = time.time()
 
 
 def actor() -> str:
@@ -90,6 +92,18 @@ def process_age(pid: int) -> Optional[float]:
     """Seconds since the process started (`ps -o etime`), None when it doesn't run or can't be asked."""
     try:
         out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)], capture_output=True, text=True, timeout=3).stdout.strip()
+    except PermissionError:
+        if pid == os.getpid():
+            return max(0.0, time.time() - _PROCESS_START)
+        try:
+            os.kill(pid, 0)
+            return 0.0
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            return 0.0
+        except OSError:
+            return None
     except (OSError, subprocess.SubprocessError):
         return None
     if not out:
