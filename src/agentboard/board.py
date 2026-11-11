@@ -304,15 +304,35 @@ def board_news(rows: list[dict], repo: str, session: str, since: str) -> list[di
     return sorted(news, key=lambda r: r.get("ts", ""))
 
 
-def board_asks(rows: list[dict], repo: str, session: str, since: str) -> list[dict]:
-    """The part of board_news a session should stop and tell its user about (what `agents wait` wakes it for): posts
-    to the repo still open, hand-offs still open, replies to its posts. Not others' claims: those matter only when
-    you claim something yourself, and `claim -p` warns then. Not a post to `all` either, unless it is urgent: those
-    are heads-ups every session sees in status and the [board] line, and waking all of them for one is too much."""
+def _in_thread(rows: list[dict], ref: Optional[str], repo: str, session: str) -> bool:
+    """Whether `session` in `repo` started or replied on `ref`'s thread (or the thread head has no session)."""
+    if not session or not ref:
+        return True
+    t = thread(rows, ref)
+    if not t:
+        return False
+    if not t[0].get("session"):
+        return True
+    return any(r.get("repo") == repo and r.get("session") == session for r in t)
+
+
+def board_asks(rows: list[dict], repo: str, session: str, since: str, *, repo_wide: bool = False) -> list[dict]:
+    """The part of board_news a session should stop and tell its user about (what `agents wait` wakes it for):
+    replies on threads `session` is part of, posts addressed to `session` (`--to repo-session`), and `--urgent`
+    posts to `repo` or `all`. Routine repo-wide posts and hand-offs stay for `agents status` / `agents whoami`
+    unless `repo_wide=True` (`agents wait --repo`)."""
     closed = {r.get("ref") for r in rows if r.get("kind") == "done"}
-    return [r for r in board_news(rows, repo, session, since)
-            if r.get("kind") in ("done", "reply") or (r.get("kind") in ("post", "handoff") and r.get("id") not in closed
-                                                      and (r.get("to") != "all" or r.get("urgent")))]
+    out = []
+    for r in board_news(rows, repo, session, since):
+        kind = r.get("kind")
+        if kind in ("done", "reply"):
+            if repo_wide or _in_thread(rows, r.get("ref"), repo, session):
+                out.append(r)
+        elif kind in ("post", "handoff") and r.get("id") not in closed:
+            for_me = bool(r.get("to_session") and session and session.startswith(r["to_session"]))
+            if r.get("urgent") or for_me or (repo_wide and r.get("to") != "all"):
+                out.append(r)
+    return out
 
 
 def urgent_first(rows: list[dict]) -> list[dict]:

@@ -5,7 +5,7 @@ At the start of work:
 1. Read `PROJECT.md` for stable project facts and constraints.
 2. Read `HANDOFF.md` for the current task and its next action.
 3. Treat these repository files as the portable source of context. Do not require access to an earlier chat, an external board, or a connected tool to understand the handoff.
-4. When the `agents` command is installed: run **`agents whoami`** once (it prints this session's name, your `AGENTS.local.md` if any, and the repo's board status; say the name in your first message, and do not pipe to `head`). Start **`agents wait` in the background** if your tool wakes the agent when a background command ends.
+4. When the `agents` command is installed: run **`agents whoami`** once (it prints this session's name, your `AGENTS.local.md` if any, and the repo's board status; say the name in your first message, and do not pipe to `head`).
 5. Optional: if **`~/.agents/pending/<this-repo>.jsonl`** exists, read it once (posts that arrived while no session was live), then **`agents status`**.
 
 While working:

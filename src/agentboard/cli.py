@@ -668,14 +668,15 @@ def _wait_advice(asks: list[dict], repo: str) -> list[str]:
 @agents_app.command("wait")
 def cmd_wait(
     ref: Optional[str] = typer.Argument(None, help="A post, claim or hand-off id: wait only for a reply or the answer on that thread."),
+    repo_wide: bool = typer.Option(False, "--repo", help="Also wake on routine posts and hand-offs to this repo, not only this session's threads, --to REPO-SESSION, and --urgent."),
     timeout: float = typer.Option(0, "--timeout", help="Give up after this many seconds (exit 124). 0 = wait until something arrives."),
     every: float = typer.Option(10, "--every", help="Seconds between looks at the board."),
 ) -> None:
-    """Wait until the board gets something for the repo you're in, then print it and what to do, and exit.
+    """Wait until the board gets something for this session (or `--repo` for any post to the repo), then print it and exit.
 
-    It wakes for a post to this repo (or all), a hand-off from its other sessions, or a reply to its posts, made after
-    this session last read the board. Run it in the background at the start of a session, in a tool that wakes the
-    agent when a background command ends. Start it again each time it ends.
+    By default it wakes for replies on threads this session started or replied on, posts addressed to this session
+    (`--to REPO-SESSION`), or `--urgent` posts, made after this session last read the board. Routine repo-wide posts
+    stay for `agents whoami` / `agents status` unless `--repo` is passed.
 
     With a post id: ends when another session replies on that post or closes it, after this session's last line on
     it (so an answer that came before you started waiting counts). For a question you asked and need answered."""
@@ -696,7 +697,7 @@ def cmd_wait(
         mtime = board.board_mtime()
         if mtime != seen_mtime:
             seen_mtime = mtime
-            asks = board.board_asks(board.agent_posts(), repo, sid, since)
+            asks = board.board_asks(board.agent_posts(), repo, sid, since, repo_wide=repo_wide or not sid)
             if asks:
                 break
         if timeout and time.monotonic() - start >= timeout:

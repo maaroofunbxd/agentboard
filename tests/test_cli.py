@@ -337,12 +337,14 @@ def test_agents_wait_wakes_for_a_request_not_for_a_claim(jdir, monkeypatch):
     monkeypatch.setenv("AGENTS_SESSION", "bbbb")
     ask = j.post("post", "please add --memory", to="tools")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
-    result = run("agents", "wait", "--timeout", "1", "--every", "0.01")
+    # Default `agents wait` does not wake a running session on routine repo-wide posts (only --repo, --to REPO-SESSION, or --urgent)
+    assert run("agents", "wait", "--timeout", "0.05", "--every", "0.01").exit_code == 124
+    result = run("agents", "wait", "--repo", "--timeout", "1", "--every", "0.01")
     out = result.output
     assert result.exit_code == 0 and out.startswith("[board] new for tools: 1 post\n")
     assert f"[post {ask['id']}]" in out and "please add --memory" in out and "someone's claim" not in out
     assert f'codex "Take post {ask["id"]} on the tools board (agents status)"' in out and "Leave it on the board" in out
-    assert run("agents", "wait", "--timeout", "0.05", "--every", "0.01").exit_code == 124  # told once
+    assert run("agents", "wait", "--repo", "--timeout", "0.05", "--every", "0.01").exit_code == 124  # told once
 
 
 def test_agents_wait_reply_only_says_tell_the_user(jdir, monkeypatch):
@@ -352,11 +354,16 @@ def test_agents_wait_reply_only_says_tell_the_user(jdir, monkeypatch):
     monkeypatch.setattr(identity, "here", lambda: "tools")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
     asked = j.post("post", "api: what port does it use?", to="api")
-    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
     monkeypatch.setattr(identity, "here", lambda: "api")
     monkeypatch.setenv("AGENTS_SESSION", "cccc")
     j.post("done", "8080", ref=asked["id"])
     monkeypatch.setattr(identity, "here", lambda: "tools")
+    # Another session `xxxx` in `tools` that didn't ask `asked` is not woken by `asked`'s reply
+    j.mark_seen("xxxx", "2020-01-01T00:00:00Z")
+    monkeypatch.setenv("AGENTS_SESSION", "xxxx")
+    assert run("agents", "wait", "--timeout", "0.05", "--every", "0.01").exit_code == 124
+    # The asking session `aaaa` wakes on its own thread's reply even with bare `agents wait`
+    j.mark_seen("aaaa", "2020-01-01T00:00:00Z")
     monkeypatch.setenv("AGENTS_SESSION", "aaaa")
     out = run("agents", "wait", "--timeout", "1", "--every", "0.01").output
     assert f"[reply {asked['id']}]" in out and ": 8080" in out and "Tell the user about the replies" in out and "new session" not in out
@@ -574,8 +581,11 @@ def test_a_post_to_one_session_wakes_only_that_session(jdir, monkeypatch):
     assert " to api-fd00" in out and "your claim overlaps mine" in out  # the repo sees it, marked for that session
     rows = j.agent_posts()
     assert [r["text"] for r in j.board_asks(rows, "api", "fd00.60203", "2020-01-01T00:00:00Z") if r["kind"] == "post"] == \
+        ["your claim overlaps mine"]
+    assert [r["text"] for r in j.board_asks(rows, "api", "e6e6.1", "2020-01-01T00:00:00Z") if r["kind"] == "post"] == []
+    assert [r["text"] for r in j.board_asks(rows, "api", "fd00.60203", "2020-01-01T00:00:00Z", repo_wide=True) if r["kind"] == "post"] == \
         ["your claim overlaps mine", "for every api session"]
-    assert [r["text"] for r in j.board_asks(rows, "api", "e6e6.1", "2020-01-01T00:00:00Z") if r["kind"] == "post"] == \
+    assert [r["text"] for r in j.board_asks(rows, "api", "e6e6.1", "2020-01-01T00:00:00Z", repo_wide=True) if r["kind"] == "post"] == \
         ["for every api session"]
 
 

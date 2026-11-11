@@ -6,7 +6,7 @@ Use this when you want **agent coordination** on any machine, without `unbxd` or
 
 ```bash
 uv tool install git+https://github.com/maaroofunbxd/agentboard
-# or: pip install "agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.11"
+# or: pip install "agentboard @ git+https://github.com/maaroofunbxd/agentboard@v0.5.12"
 ```
 
 Defaults: board at `~/.agents/board/agents.jsonl`, per-user files under `~/.agents/`. Override with `AGENTS_BOARD_DIR` and `AGENTS_DIR` (see the main README).
